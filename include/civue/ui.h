@@ -336,6 +336,24 @@ const civue_text_block *civue_fit(civue_ui *ui, const char *s, civue_text_style 
 
 static inline void civue_set_cursor(civue_ui *ui, civue_cursor_kind k) { ui->cursor = (civue_cursor){k, 0}; }
 
+/* ========================================================================================================== */
+/* blocks. each runs its body once between a begin and an end, so a `break` or a `return` inside skips the    */
+/* end.                                                                                                       */
+/* ========================================================================================================== */
+
+#define CIVUE__CAT_(a, b) a##b
+#define CIVUE__CAT(a, b) CIVUE__CAT_(a, b)
+#define CIVUE__ONCE CIVUE__CAT(civue__once_, __LINE__)
+#define CIVUE__WAS CIVUE__CAT(civue__was_, __LINE__)
+
+// draws its body clipped to `r`.
+#define CIVUE_CLIPPED(ui, r) \
+  for (bool CIVUE__ONCE = (civue_push_clip(ui, r), true); CIVUE__ONCE; CIVUE__ONCE = (civue_pop_clip(ui), false))
+// draws its body above everything else, for menus and popovers.
+#define CIVUE_OVERLAY(ui)                                                          \
+  for (bool CIVUE__WAS = civue_begin_overlay(ui), CIVUE__ONCE = true; CIVUE__ONCE; \
+       CIVUE__ONCE = (civue_end_overlay(ui, CIVUE__WAS), false))
+
 #ifdef __cplusplus
 }
 #endif

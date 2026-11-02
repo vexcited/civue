@@ -9,8 +9,8 @@ extern "C" {
 
 /* ========================================================================================================== */
 /* widgets: buttons, sliders, segmented controls, checkboxes and switches, fields, dropdowns, scroll areas,   */
-/* menus, tooltips, floating surfaces and progress indicators, drawn like figma's ui3. each is a call per frame */
-/* returning what the pointer and the keys did with it.                                                       */
+/* menus, tooltips, floating surfaces and progress indicators, drawn like figma's ui3. each is a call per     */
+/* frame returning what the pointer and the keys did with it.                                                 */
 /* ========================================================================================================== */
 
 typedef enum : uint8_t {
@@ -46,7 +46,7 @@ typedef enum : uint8_t {
   CIVUE_E500,
   CIVUE_E500_MODAL
 } civue_elevation;
-// shadows precede the fill; the dark theme's inner edge follows it.
+// shadows go before the fill, the dark theme's inner edge after it.
 void civue_elevation_shadow(civue_ui *ui, civue_rect r, float radius, civue_elevation e);
 void civue_elevation_edge(civue_ui *ui, civue_rect r, float radius, civue_elevation e);
 void civue_floating(civue_ui *ui, civue_rect r, float radius, civue_color fill, civue_elevation e);
@@ -75,7 +75,7 @@ int32_t civue_button_group_dimmed(civue_ui *ui, civue_id id, civue_rect r, const
                                   bool enabled, bool dimmed);
 bool civue_checkbox(civue_ui *ui, civue_id id, civue_vec2 at, bool checked, const char *label);
 bool civue_checkbox_brand(civue_ui *ui, civue_id id, civue_vec2 at, bool checked, const char *label);
-// paints a switch; the caller owns its interaction.
+// paints a switch, the caller owns its interaction.
 void civue_switch_draw(civue_ui *ui, civue_rect r, bool on);
 
 // each begin returns the shifted content rect and requires civue_scroll_end.
@@ -129,7 +129,7 @@ typedef struct {
 civue_menu_style civue_menu_style_default(void);
 enum { CIVUE_MENU_MAX_DEPTH = 32 };
 void civue_menu_image_draw(civue_ui *ui, civue_menu_image img, civue_rect r);
-// path must hold MENU_MAX_DEPTH entries; depth is zero when none is chosen.
+// path must hold CIVUE_MENU_MAX_DEPTH entries, depth is zero when none is chosen.
 bool civue_menu_path(civue_ui *ui, civue_id id, civue_rect anchor, bool *open, const civue_menu_item *items,
                      uint32_t count, uint32_t *path, uint32_t *depth);
 bool civue_menu_styled(civue_ui *ui, civue_id id, civue_rect anchor, bool *open, const civue_menu_item *items,
@@ -159,6 +159,12 @@ void civue_shimmer(civue_ui *ui, civue_rect r, float radius, float t, float opac
 void civue_fade_out(civue_ui *ui, civue_rect r, civue_color color);
 float civue_cubic_bezier(float x1, float y1, float x2, float y2, float t);
 float civue_ease(float t);
+
+// a scroll area over `r` of `height` points of content, `content` the shifted rect its body lays out in. a
+// `break` or a `return` inside skips civue_scroll_end.
+#define CIVUE_SCROLLING(ui, id, r, height, content)                                                     \
+  for (civue_rect content = civue_scroll_area(ui, id, r, height), *CIVUE__ONCE = &content; CIVUE__ONCE; \
+       CIVUE__ONCE = (civue_scroll_end(ui), nullptr))
 
 #ifdef __cplusplus
 }
