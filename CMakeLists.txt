@@ -21,8 +21,11 @@ endif()
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/civue_shaders.cmake)
 
 set(CIVUE_SOURCES src/base.c src/draw.c src/icons.c src/theme.c src/ui.c)
-set(CIVUE_DARWIN_SOURCES src/darwin/gfx.c src/darwin/gpu.c src/darwin/objc.c src/darwin/svg.c src/darwin/text.c)
-set(CIVUE_LINUX_SOURCES src/linux/gfx.c src/linux/svg.c src/linux/text.c src/linux/vk.c)
+set(CIVUE_DARWIN_SOURCES src/darwin/clipboard.c src/darwin/cursors.c src/darwin/filepanel.c src/darwin/gfx.c
+  src/darwin/gpu.c src/darwin/objc.c src/darwin/pasteboard.c src/darwin/spell.c src/darwin/svg.c src/darwin/text.c
+  src/darwin/window.c)
+set(CIVUE_LINUX_SOURCES src/linux/clipboard.c src/linux/cursors.c src/linux/filepanel.c src/linux/gfx.c
+  src/linux/pasteboard.c src/linux/spell.c src/linux/svg.c src/linux/text.c src/linux/vk.c src/linux/window.c)
 
 if(APPLE)
   enable_language(OBJC)
@@ -30,14 +33,31 @@ if(APPLE)
   target_compile_options(civue PRIVATE -fblocks)
   target_link_libraries(civue PUBLIC "-framework Foundation" "-framework AppKit" "-framework Metal"
     "-framework QuartzCore" "-framework CoreText" "-framework CoreGraphics" "-framework ImageIO"
-    "-framework CoreFoundation" objc)
+    "-framework CoreFoundation" "-framework UniformTypeIdentifiers" objc)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_library(civue STATIC ${CIVUE_SOURCES} ${CIVUE_LINUX_SOURCES})
   target_compile_definitions(civue PRIVATE _GNU_SOURCE)
   find_package(Threads REQUIRED)
   find_package(PkgConfig REQUIRED)
-  pkg_check_modules(CIVUE_DEPS REQUIRED IMPORTED_TARGET vulkan freetype2 harfbuzz fontconfig fribidi librsvg-2.0 cairo)
+  pkg_check_modules(CIVUE_DEPS REQUIRED IMPORTED_TARGET vulkan freetype2 harfbuzz fontconfig fribidi librsvg-2.0 cairo
+    gio-2.0 wayland-client wayland-cursor xkbcommon enchant-2)
   target_link_libraries(civue PUBLIC PkgConfig::CIVUE_DEPS Threads::Threads m)
+  # the wayland protocols past the core one, their client code generated.
+  pkg_get_variable(CIVUE_SCANNER_PATH wayland-scanner wayland_scanner)
+  find_program(CIVUE_WAYLAND_SCANNER NAMES wayland-scanner HINTS ${CIVUE_SCANNER_PATH} REQUIRED)
+  file(GLOB protocols CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/protocols/*.xml)
+  set(gen ${CMAKE_CURRENT_BINARY_DIR}/wayland)
+  file(MAKE_DIRECTORY ${gen})
+  foreach(xml ${protocols})
+    get_filename_component(name ${xml} NAME_WE)
+    add_custom_command(OUTPUT ${gen}/${name}-client-protocol.h ${gen}/${name}-protocol.c
+      COMMAND ${CIVUE_WAYLAND_SCANNER} client-header ${xml} ${gen}/${name}-client-protocol.h
+      COMMAND ${CIVUE_WAYLAND_SCANNER} private-code ${xml} ${gen}/${name}-protocol.c
+      DEPENDS ${xml}
+      COMMENT "wayland-scanner ${name}")
+    target_sources(civue PRIVATE ${gen}/${name}-client-protocol.h ${gen}/${name}-protocol.c)
+  endforeach()
+  target_include_directories(civue SYSTEM PRIVATE ${gen})
 else()
   message(FATAL_ERROR "civue runs on macOS and Linux")
 endif()

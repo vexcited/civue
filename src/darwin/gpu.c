@@ -15,3 +15,5 @@ void *civue_gpu_device(void) {
 }
 
 void civue_gpu_set_name(const char *name) {}
+
+void civue__gpu_title(const char *title) {}

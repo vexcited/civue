@@ -127,6 +127,9 @@ void civue__map_clear(civue_map *m);
 #define color_hex civue_hex
 #define color_alpha civue_alpha
 
+// names the app after its window's title for the gpu's drivers, unless the app named itself.
+void civue__gpu_title(const char *title);
+
 /* ========================================================================================================== */
 /* files.                                                                                                     */
 /* ========================================================================================================== */

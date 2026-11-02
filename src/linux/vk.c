@@ -262,7 +262,16 @@ const civue_vk_device *civue_vk(void) {
 
 void *civue_gpu_device(void) { return (void *)civue_vk(); }
 
-void civue_gpu_set_name(const char *name) { app_name = name; }
+static bool named;
+
+void civue_gpu_set_name(const char *name) {
+  app_name = name;
+  named = true;
+}
+
+void civue__gpu_title(const char *title) {
+  if (!named) app_name = title;
+}
 
 // ---- memory ----
 
