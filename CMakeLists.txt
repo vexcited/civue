@@ -20,9 +20,9 @@ endif()
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/civue_shaders.cmake)
 
-set(CIVUE_SOURCES src/base.c)
-set(CIVUE_DARWIN_SOURCES src/darwin/gpu.c src/darwin/objc.c)
-set(CIVUE_LINUX_SOURCES src/linux/vk.c)
+set(CIVUE_SOURCES src/base.c src/draw.c)
+set(CIVUE_DARWIN_SOURCES src/darwin/gfx.c src/darwin/gpu.c src/darwin/objc.c)
+set(CIVUE_LINUX_SOURCES src/linux/gfx.c src/linux/vk.c)
 
 if(APPLE)
   enable_language(OBJC)
@@ -42,6 +42,8 @@ else()
   message(FATAL_ERROR "civue runs on macOS and Linux")
 endif()
 add_library(civue::civue ALIAS civue)
+civue_embed_shaders(civue PREFIX civue SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ui.metal
+  ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ui.vert ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ui.frag)
 target_include_directories(civue PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 target_compile_features(civue PUBLIC c_std_23)
