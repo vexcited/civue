@@ -1,0 +1,7 @@
+-std=gnu23
+-fblocks
+-Iinclude
+-Isrc
+-I../ciko-cilo/include
+-Wall
+-Wextra
