@@ -20,7 +20,8 @@ endif()
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/civue_shaders.cmake)
 
-set(CIVUE_SOURCES src/base.c src/draw.c src/icons.c src/theme.c src/ui.c)
+set(CIVUE_SOURCES src/base.c src/draw.c src/field.c src/icons.c src/numfield.c src/richedit.c src/richtext.c src/theme.c
+  src/ui.c src/widgets.c)
 set(CIVUE_DARWIN_SOURCES src/darwin/clipboard.c src/darwin/cursors.c src/darwin/filepanel.c src/darwin/gfx.c
   src/darwin/gpu.c src/darwin/objc.c src/darwin/pasteboard.c src/darwin/spell.c src/darwin/svg.c src/darwin/text.c
   src/darwin/window.c)
