@@ -128,22 +128,8 @@ char *civue__buf_take(civue_bytes *b) {
 }
 
 /* ========================================================================================================== */
-/* hashing, text and maps.                                                                                    */
+/* text.                                                                                                      */
 /* ========================================================================================================== */
-
-uint64_t civue_hash(const void *p, size_t n) {
-  const u8 *s = p;
-  u64 h = 0xcbf29ce484222325ull;
-  usize i = 0;
-  for (; i + 8 <= n; i += 8) {
-    u64 w;
-    memcpy(&w, s + i, 8);
-    h = (h ^ w) * 0x100000001b3ull;
-    h ^= h >> 29;
-  }
-  for (; i < n; i++) h = (h ^ s[i]) * 0x100000001b3ull;
-  return hash_u64(h ^ n);
-}
 
 uint32_t civue_utf8_next(const char *s, size_t n, size_t *i) {
   const u8 *p = (const u8 *)s;
@@ -197,87 +183,6 @@ size_t civue_utf8_put(char out[4], uint32_t cp) {
   out[2] = 0x80 | ((cp >> 6) & 0x3f);
   out[3] = 0x80 | (cp & 0x3f);
   return 4;
-}
-
-static void map_rehash(civue_map *m, u32 cap) {
-  civue_map_slot *old = m->slots;
-  u32 n = m->cap;
-  m->slots = xcalloc(cap, sizeof(civue_map_slot));
-  m->cap = cap;
-  u32 mask = cap - 1;
-  for (u32 i = 0; i < n; i++) {
-    if (!old[i].key) continue;
-    u32 at = hash_u64(old[i].key) & mask;
-    while (m->slots[at].key) at = (at + 1) & mask;
-    m->slots[at] = old[i];
-  }
-  free(old);
-}
-
-bool civue__map_get(const civue_map *m, u64 key, u64 *val) {
-  if (!m->cap) return false;
-  u32 mask = m->cap - 1;
-  for (u32 i = hash_u64(key) & mask;; i = (i + 1) & mask) {
-    const civue_map_slot *s = &m->slots[i];
-    if (s->key == key) {
-      if (val) *val = s->val;
-      return true;
-    }
-    if (!s->key) return false;
-  }
-}
-
-void civue__map_put(civue_map *m, u64 key, u64 val) {
-  if (unlikely((m->len + 1) * 4 > m->cap * 3)) map_rehash(m, m->cap ? m->cap * 2 : 16);
-  u32 mask = m->cap - 1;
-  for (u32 i = hash_u64(key) & mask;; i = (i + 1) & mask) {
-    civue_map_slot *s = &m->slots[i];
-    if (s->key == key) {
-      s->val = val;
-      return;
-    }
-    if (!s->key) {
-      *s = (civue_map_slot){key, val};
-      m->len++;
-      return;
-    }
-  }
-}
-
-bool civue__map_del(civue_map *m, u64 key) {
-  if (!m->cap) return false;
-  u32 mask = m->cap - 1, i = hash_u64(key) & mask;
-  while (m->slots[i].key != key) {
-    if (!m->slots[i].key) return false;
-    i = (i + 1) & mask;
-  }
-  // backward shift deletion keeps probe chains intact.
-  for (u32 j = i;;) {
-    m->slots[i].key = 0;
-    for (;;) {
-      j = (j + 1) & mask;
-      if (!m->slots[j].key) {
-        m->len--;
-        return true;
-      }
-      u32 home = hash_u64(m->slots[j].key) & mask;
-      if (i <= j ? (home <= i || home > j) : (home <= i && home > j)) break;
-    }
-    m->slots[i] = m->slots[j];
-    i = j;
-  }
-}
-
-void civue__map_free(civue_map *m) {
-  free(m->slots);
-  *m = (civue_map){0};
-}
-
-void civue__map_clear(civue_map *m) {
-  if (m->cap) {
-    memset(m->slots, 0, m->cap * sizeof(civue_map_slot));
-    m->len = 0;
-  }
 }
 
 /* ========================================================================================================== */

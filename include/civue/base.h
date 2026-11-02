@@ -8,6 +8,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <cilo/map.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -67,14 +69,8 @@ typedef CIVUE_STRS civue_strs;
 typedef CIVUE_VEC(char *) civue_strs;
 #endif
 
-// a map from nonzero keys to values, open addressing.
-typedef struct {
-  uint64_t key, val;
-} civue_map_slot;
-typedef struct {
-  civue_map_slot *slots;
-  uint32_t cap, len;
-} civue_map;
+// a map from keys to values, cilo's.
+typedef CILO_MAP(uint64_t, uint64_t) civue_map;
 
 static constexpr civue_color CIVUE_BLACK = {0, 0, 0, 1};
 static constexpr civue_color CIVUE_WHITE = {1, 1, 1, 1};
@@ -134,9 +130,9 @@ static inline uint64_t civue_hash_u64(uint64_t x) {
   x ^= x >> 33;
   return x;
 }
-// fnv-1a over words, mixed through a finalizer.
-uint64_t civue_hash(const void *p, size_t n);
-static inline uint64_t civue_hash_str(const char *s) { return civue_hash(s, strlen(s)); }
+// cilo's hash, for this process only: it may change between versions.
+static inline uint64_t civue_hash(const void *p, size_t n) { return cilo_hash(p, n); }
+static inline uint64_t civue_hash_str(const char *s) { return cilo_hash_str(s); }
 
 // the code point at s[*i], *i moved past it. invalid bytes read as u+fffd.
 uint32_t civue_utf8_next(const char *s, size_t n, size_t *i);

@@ -87,19 +87,15 @@ static inline void buf_putc(civue_bytes *b, char c) { vec_push(b, (u8)c); }
 /* maps, hashing and text.                                                                                    */
 /* ========================================================================================================== */
 
-bool civue__map_get(const civue_map *m, u64 key, u64 *val);
-void civue__map_put(civue_map *m, u64 key, u64 val);
-bool civue__map_del(civue_map *m, u64 key);
-void civue__map_free(civue_map *m);
-void civue__map_clear(civue_map *m);
-#define map_get civue__map_get
-#define map_put civue__map_put
-#define map_del civue__map_del
-#define map_free civue__map_free
-#define map_clear civue__map_clear
-#define map_each(m, i)               \
-  for (u32 i = 0; i < (m)->cap; i++) \
-    if ((m)->slots[i].key)
+static inline bool map_get(const civue_map *m, u64 key, u64 *val) {
+  const u64 *v = CILO_MAP_GET(m, key);
+  if (v && val) *val = *v;
+  return v;
+}
+static inline void map_put(civue_map *m, u64 key, u64 val) { *CILO_MAP_PUT(&cilo_heap, m, key) = val; }
+static inline bool map_del(civue_map *m, u64 key) { return CILO_MAP_DEL(m, key); }
+static inline void map_free(civue_map *m) { CILO_MAP_DROP(&cilo_heap, m); }
+static inline void map_clear(civue_map *m) { CILO_MAP_CLEAR(m); }
 
 #define hash_u64 civue_hash_u64
 #define hash_bytes civue_hash

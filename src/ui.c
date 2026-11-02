@@ -35,8 +35,8 @@ void civue_input_free(civue_input *in) {
 
 void civue_ui_free(civue_ui *ui) {
   if (!ui) return;
-  map_each(&ui->memory, i) {
-    Memory *m = (Memory *)ui->memory.slots[i].val;
+  CILO_MAP_EACH(e, &ui->memory) {
+    Memory *m = (Memory *)e->val;
     if (m->drop) m->drop(m->data);
     own_free(m);
   }
