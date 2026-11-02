@@ -128,9 +128,9 @@ static void resize_layer(void) {
   msg1(void, W.layer, "setDrawableSize:", size);
 }
 
-// places the traffic lights in the app's title bar: the close button 12
-// points from the left, and from the top since macOS 26, 11 before. appkit lays them out again on resizes, so this runs every frame and
-// only moves what moved.
+// places the traffic lights in the app's title bar: the close button 12 points from the left, and from the top
+// since macos 26, 11 before. appkit lays them out again on resizes, so this runs every frame and only moves what
+// moved.
 static void place_window_buttons(void) {
   id first = msg1(id, W.window, "standardWindowButton:", (NSUInteger)0);
   if (!first) return;

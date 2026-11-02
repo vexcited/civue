@@ -87,8 +87,8 @@ float civue_rich_draw(civue_ui *ui, const civue_rich_doc *d, civue_vec2 origin, 
                       civue_color c);
 
 /* ========================================================================================================== */
-/* editing: the doc's own edits, its html, and an editor with bold and italic on cmd+b and cmd+i, lists       */
-/* and markdown shortcuts as they are typed.                                                                  */
+/* editing: the doc's own edits, its html, and an editor with bold and italic on cmd+b and cmd+i, lists and   */
+/* markdown shortcuts as they are typed.                                                                      */
 /* ========================================================================================================== */
 
 // a doc of one empty paragraph.

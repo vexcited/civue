@@ -8,7 +8,7 @@ extern "C" {
 #endif
 
 /* ========================================================================================================== */
-/* draw lists. what a frame draws, platform neutral: instanced quads in physical pixels, in order, batched by  */
+/* draw lists. what a frame draws, platform neutral: instanced quads in physical pixels, in order, batched by */
 /* the image they sample. <civue/gfx.h> draws them on the gpu.                                                */
 /* ========================================================================================================== */
 

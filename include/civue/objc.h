@@ -35,7 +35,7 @@ typedef struct {
     civue_cls_;                                                                 \
   })
 
-// typed objc_msgSend casts. every argument's c type must match the method's, `(NSUInteger)0` and not `0`.
+// typed objc_msgSend casts. every argument's c type must match the method's, a literal 0 is cast to NSUInteger.
 #define CIVUE_MSG0(R, o, s) ((R (*)(id, SEL))objc_msgSend)((id)(o), CIVUE_SEL(s))
 #define CIVUE_MSG1(R, o, s, a) ((R (*)(id, SEL, typeof(a)))objc_msgSend)((id)(o), CIVUE_SEL(s), a)
 #define CIVUE_MSG2(R, o, s, a, b) ((R (*)(id, SEL, typeof(a), typeof(b)))objc_msgSend)((id)(o), CIVUE_SEL(s), a, b)

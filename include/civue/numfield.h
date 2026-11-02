@@ -41,7 +41,7 @@ civue_num_change civue_num_field(civue_ui *ui, civue_id id, civue_rect r, civue_
 void civue_num_field_faint(civue_ui *ui);
 void civue_num_field_blank(civue_ui *ui);
 // the next number field takes = for a variable, answering it with
-// NUM_VARIABLE. the field takes the character out of what is typed.
+// CIVUE_NUM_VARIABLE. the field takes the character out of what is typed.
 void civue_num_field_variable(civue_ui *ui);
 // starts editing the number field `id` with `text`, as if it was clicked.
 void civue_focus_num(civue_ui *ui, civue_id id, const char *text);

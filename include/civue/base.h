@@ -13,7 +13,7 @@ extern "C" {
 #endif
 
 /* ========================================================================================================== */
-/* values. positions and sizes are logical points as doubles, colors straight alpha floats from 0 to 1.        */
+/* values. positions and sizes are logical points as doubles, colors straight alpha floats from 0 to 1.       */
 /* ========================================================================================================== */
 
 // an app whose own types have the same members defines CIVUE_VEC2, CIVUE_RECT, CIVUE_COLOR, CIVUE_BYTES,

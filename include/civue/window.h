@@ -8,8 +8,8 @@ extern "C" {
 #endif
 
 /* ========================================================================================================== */
-/* the window and the main loop. frames are only built when something changed and are presented in step with */
-/* the display: a display link on macos, the compositor's frame callbacks on wayland.                          */
+/* the window and the main loop. frames are only built when something changed and are presented in step with  */
+/* the display: a display link on macos, the compositor's frame callbacks on wayland.                         */
 /* ========================================================================================================== */
 
 typedef struct {
