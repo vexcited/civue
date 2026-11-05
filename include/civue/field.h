@@ -20,13 +20,19 @@ typedef struct {
   bool focused;
 } civue_field_response;
 
-// how a text field looks while it edits.
+// a field's box and the text in it.
 typedef struct {
-  // room between the box and the text on each side.
-  float pad;
   civue_color bg, border;
   float border_width, radius;
   civue_color text;
+} civue_field_box;
+
+// how a text field looks: while it edits, and while it doesn't, hovered or not.
+typedef struct {
+  // room between the box and the text on each side.
+  float pad;
+  civue_field_box editing, idle, hovered;
+  civue_color placeholder, selection;
 } civue_field_look;
 
 // the panels' fields.

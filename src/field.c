@@ -16,7 +16,14 @@ typedef struct {
 } Field;
 
 civue_field_look civue_field_look_panel(const civue_theme *t) {
-  return (civue_field_look){8, t->bg, t->border_selected, 1, CIVUE_RADIUS_MEDIUM, t->text};
+  return (civue_field_look){
+      .pad = 8,
+      .editing = {t->bg, t->border_selected, 1, CIVUE_RADIUS_MEDIUM, t->text},
+      .idle = {t->bg_secondary, CIVUE_CLEAR, 1, CIVUE_RADIUS_MEDIUM, t->text},
+      .hovered = {t->bg_secondary, t->border, 1, CIVUE_RADIUS_MEDIUM, t->text},
+      .placeholder = t->text_tertiary,
+      .selection = t->bg_selected_hover,
+  };
 }
 
 static void drop_field(void *p) {
@@ -244,16 +251,16 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r, 
   civue_vec2 origin = multiline ? v2(area.x0, r.y0 + 4) : v2(area.x0, r.y0 + (rect_h(r) - style.line_height) / 2);
   f32 wrap = multiline ? (f32)rect_w(area) : 0;
   const char *v = *value ? *value : "";
-  const civue_theme *th = &ui->theme;
 
   // the editor only exists while the field is focused.
   if (!focused) {
     civue_forget(ui, id);
-    civue_fill_stroke(ui, r, th->bg_secondary, resp.hovered ? th->border : CIVUE_CLEAR, 1, CIVUE_RADIUS_MEDIUM);
+    civue_field_box box = resp.hovered ? look.hovered : look.idle;
+    civue_fill_stroke(ui, r, box.bg, box.border, box.border_width, box.radius);
     civue_push_clip(ui, area);
     bool empty = !*v;
     const civue_text_block *b = civue_layout(ui, empty ? placeholder : v, style, wrap);
-    civue_draw_text(ui, b, origin, empty ? th->text_tertiary : th->text);
+    civue_draw_text(ui, b, origin, empty ? look.placeholder : box.text);
     civue_pop_clip(ui);
     return out;
   }
@@ -308,7 +315,8 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r, 
     out.changed = true;
   }
 
-  civue_fill_stroke(ui, r, look.bg, look.border, look.border_width, look.radius);
+  civue_field_box box = look.editing;
+  civue_fill_stroke(ui, r, box.bg, box.border, box.border_width, box.radius);
   // what an input method composes shows at the caret, underlined.
   civue_bytes shown = {};
   buf_put(&shown, f->text.v, f->caret);
@@ -339,17 +347,17 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r, 
       if (tl != l) x1 = b->width;
       if (sl != l) x0 = 0;
       civue_rect sel = rect(at.x + x0, at.y + b->lines[l].top, at.x + x1, at.y + b->lines[l].top + lh);
-      civue_fill(ui, sel, th->bg_selected_hover, 0);
+      civue_fill(ui, sel, look.selection, 0);
     }
   }
   // an empty field keeps its placeholder while focused, a browser's.
-  if (!shown.len && placeholder && *placeholder) civue_text(ui, placeholder, style, origin, th->text_tertiary);
-  civue_draw_text(ui, b, at, look.text);
+  if (!shown.len && placeholder && *placeholder) civue_text(ui, placeholder, style, origin, look.placeholder);
+  civue_draw_text(ui, b, at, box.text);
   if (in->preedit.len) {
     u32 pl;
     f32 p0 = caret_x(b, f->caret, &pl);
     f32 y = at.y + (b->nlines ? b->lines[cl].baseline : b->baseline) + 2;
-    civue_hline(ui, at.x + p0, at.x + cx, y, look.text);
+    civue_hline(ui, at.x + p0, at.x + cx, y, box.text);
   }
   f64 since = ui->now - f->blink;
   bool lit = (u64)(since / 0.53) % 2 == 0;
@@ -357,7 +365,7 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r, 
     f64 x = at.x + cx;
     f64 y0 = multiline ? at.y + (b->nlines ? b->lines[cl].top : 0) : origin.y + 1;
     f64 y1 = multiline ? y0 + lh : origin.y + style.line_height - 1;
-    civue_fill(ui, rect(x, y0, x + 1, y1), look.text, 0);
+    civue_fill(ui, rect(x, y0, x + 1, y1), box.text, 0);
   }
   civue_pop_clip(ui);
   vec_free(&shown);
