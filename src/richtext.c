@@ -176,15 +176,6 @@ constexpr f32 INDENT = 20;
 constexpr f32 CODE_PAD = 4;
 // the room a code block's gray takes around its lines.
 constexpr f32 BLOCK_PAD = 4;
-static const civue_color CODE_GRAY = {0xf5 / 255.f, 0xf5 / 255.f, 0xf5 / 255.f, 1};
-
-// the gray under code: light for dark text, a veil of the text's own color
-// for light text on a dark ground.
-static civue_color code_ground(civue_color text) {
-  f32 luma = .299f * text.r + .587f * text.g + .114f * text.b;
-  return luma < .5f ? CODE_GRAY : (civue_color){text.r, text.g, text.b, .12f};
-}
-
 void civue_rich_lay_free(civue_rich_lay *l) {
   vec_free(&l->pieces);
   vec_free(&l->boxes);
@@ -261,7 +252,8 @@ void civue_rich_layout(civue_ui *ui, const civue_rich_doc *d, civue_text_style s
 }
 
 void civue_rich_paint(civue_ui *ui, const civue_rich_doc *d, const civue_rich_lay *l, civue_vec2 origin,
-                      civue_text_style style, civue_color c) {
+                      civue_text_style style, civue_rich_colors colors) {
+  civue_color c = colors.text;
   u32 number = 0;
   for (u32 b = 0; b < d->blocks.len; b++) {
     const civue_rich_box *box = &l->boxes.v[b];
@@ -282,7 +274,7 @@ void civue_rich_paint(civue_ui *ui, const civue_rich_doc *d, const civue_rich_la
       u32 q = b;
       while (q + 1 < d->blocks.len && d->blocks.v[q + 1] == kind) q++;
       f32 bottom = (f32)origin.y + l->boxes.v[q].y + l->boxes.v[q].height;
-      civue_fill(ui, rect(origin.x - CODE_PAD, top, origin.x + l->width + CODE_PAD, bottom), code_ground(c), 3);
+      civue_fill(ui, rect(origin.x - CODE_PAD, top, origin.x + l->width + CODE_PAD, bottom), colors.code, 3);
     }
   }
   // inline code sits on a light gray, a little wider than its text, one
@@ -296,13 +288,13 @@ void civue_rich_paint(civue_ui *ui, const civue_rich_doc *d, const civue_rich_la
            l->pieces.v[q + 1].y == a->y)
       x1 = l->pieces.v[++q].x1;
     f32 h = style.size + 4, cy = (f32)origin.y + a->y + style.line_height / 2;
-    civue_fill(ui, rect(origin.x + a->x0, cy - h / 2, origin.x + x1, cy + h / 2), code_ground(c), 4);
+    civue_fill(ui, rect(origin.x + a->x0, cy - h / 2, origin.x + x1, cy + h / 2), colors.code, 4);
     p = q;
   }
   for (u32 p = 0; p < l->pieces.len; p++) {
     const civue_rich_piece *a = &l->pieces.v[p];
     bool link = a->fmt & CIVUE_RICH_LINK_MASK;
-    civue_color ink = link ? ui->theme.text_brand : c;
+    civue_color ink = link ? colors.link : c;
     if (a->text) civue_draw_text(ui, a->text, v2(origin.x + a->x, origin.y + a->y), ink);
     if (!a->ink_w) continue;
     const civue_rich_box *box = &l->boxes.v[a->block];
@@ -323,10 +315,10 @@ civue_vec2 civue_rich_measure(civue_ui *ui, const civue_rich_doc *d, civue_text_
 }
 
 f32 civue_rich_draw(civue_ui *ui, const civue_rich_doc *d, civue_vec2 origin, civue_text_style style, f32 width,
-                    civue_color c) {
+                    civue_rich_colors colors) {
   civue_rich_lay l;
   civue_rich_layout(ui, d, style, width, &l);
-  civue_rich_paint(ui, d, &l, origin, style, c);
+  civue_rich_paint(ui, d, &l, origin, style, colors);
   f32 height = l.height;
   civue_rich_lay_free(&l);
   return height;

@@ -63,6 +63,11 @@ typedef struct {
   civue_rich_block kind;
 } civue_rich_box;
 
+// the colors a doc is drawn in: its text, its links, the ground under its code, and its selection's while edited.
+typedef struct {
+  civue_color text, link, code, selection;
+} civue_rich_colors;
+
 // a doc laid out, for drawing and for finding where bytes and points are.
 typedef struct {
   CIVUE_VEC(civue_rich_piece) pieces;
@@ -79,12 +84,12 @@ void civue_rich_layout(civue_ui *ui, const civue_rich_doc *d, civue_text_style s
 void civue_rich_lay_free(civue_rich_lay *l);
 // draws a doc laid out at `origin`: list markers, code grounds, the text.
 void civue_rich_paint(civue_ui *ui, const civue_rich_doc *d, const civue_rich_lay *l, civue_vec2 origin,
-                      civue_text_style style, civue_color c);
+                      civue_text_style style, civue_rich_colors colors);
 // its size wrapped at `width`, the widest line and the height.
 civue_vec2 civue_rich_measure(civue_ui *ui, const civue_rich_doc *d, civue_text_style style, float width);
 // draws it from `origin`, returning its height.
 float civue_rich_draw(civue_ui *ui, const civue_rich_doc *d, civue_vec2 origin, civue_text_style style, float width,
-                      civue_color c);
+                      civue_rich_colors colors);
 
 /* ========================================================================================================== */
 /* editing: the doc's own edits, its html, and an editor with bold and italic on cmd+b and cmd+i, lists and   */
@@ -129,10 +134,10 @@ typedef struct {
 // handled while it has the focus. enter is the caller's, shift enter starts
 // a new block like figma's.
 civue_rich_response civue_rich_edit(civue_ui *ui, civue_id id, civue_vec2 origin, float width, civue_rich_doc *d,
-                                    civue_text_style style, civue_color color);
+                                    civue_text_style style, civue_rich_colors colors);
 // the same where enter starts a new block, for a description.
 civue_rich_response civue_rich_edit_multiline(civue_ui *ui, civue_id id, civue_vec2 origin, float width,
-                                              civue_rich_doc *d, civue_text_style style, civue_color color);
+                                              civue_rich_doc *d, civue_text_style style, civue_rich_colors colors);
 // puts the caret of the editing doc `id` after its text, false while it
 // isn't editing yet.
 bool civue_rich_caret_to_end(civue_ui *ui, civue_id id, const civue_rich_doc *d);

@@ -614,9 +614,8 @@ bool civue_rich_caret_to_end(civue_ui *ui, civue_id id, const civue_rich_doc *d)
 }
 
 // the selected bytes' grounds, and the newlines inside them.
-static void selection(civue_ui *ui, const civue_rich_doc *d, const civue_rich_lay *l, civue_vec2 origin, u32 lo,
-                      u32 hi) {
-  civue_color color = ui->theme.bg_selected_hover;
+static void selection(civue_ui *ui, const civue_rich_doc *d, const civue_rich_lay *l, civue_vec2 origin, u32 lo, u32 hi,
+                      civue_color color) {
   vec_each(&l->pieces, p) {
     u32 s = MAX(lo, p->start), e = MIN(hi, p->end);
     if (s >= e) continue;
@@ -633,20 +632,20 @@ static void selection(civue_ui *ui, const civue_rich_doc *d, const civue_rich_la
 }
 
 static civue_rich_response rich_edit_at(civue_ui *ui, civue_id id, civue_vec2 origin, f32 width, civue_rich_doc *d,
-                                        civue_text_style style, civue_color color, bool multiline);
+                                        civue_text_style style, civue_rich_colors colors, bool multiline);
 
 civue_rich_response civue_rich_edit(civue_ui *ui, civue_id id, civue_vec2 origin, f32 width, civue_rich_doc *d,
-                                    civue_text_style style, civue_color color) {
-  return rich_edit_at(ui, id, origin, width, d, style, color, false);
+                                    civue_text_style style, civue_rich_colors colors) {
+  return rich_edit_at(ui, id, origin, width, d, style, colors, false);
 }
 
 civue_rich_response civue_rich_edit_multiline(civue_ui *ui, civue_id id, civue_vec2 origin, f32 width,
-                                              civue_rich_doc *d, civue_text_style style, civue_color color) {
-  return rich_edit_at(ui, id, origin, width, d, style, color, true);
+                                              civue_rich_doc *d, civue_text_style style, civue_rich_colors colors) {
+  return rich_edit_at(ui, id, origin, width, d, style, colors, true);
 }
 
 static civue_rich_response rich_edit_at(civue_ui *ui, civue_id id, civue_vec2 origin, f32 width, civue_rich_doc *d,
-                                        civue_text_style style, civue_color color, bool multiline) {
+                                        civue_text_style style, civue_rich_colors colors, bool multiline) {
   civue_rich_lay l;
   civue_rich_layout(ui, d, style, width, &l);
   civue_rect area = rect_xywh(origin.x, origin.y, width, l.height);
@@ -655,7 +654,7 @@ static civue_rich_response rich_edit_at(civue_ui *ui, civue_id id, civue_vec2 or
   civue_rich_response out = {.height = l.height};
   if (ui->focus != id) {
     civue_forget(ui, id);
-    civue_rich_paint(ui, d, &l, origin, style, color);
+    civue_rich_paint(ui, d, &l, origin, style, colors);
     civue_rich_lay_free(&l);
     return out;
   }
@@ -727,13 +726,13 @@ static civue_rich_response rich_edit_at(civue_ui *ui, civue_id id, civue_vec2 or
   if (touched) st->blink = ui->now;
   // the selection behind, then the text and the blinking caret.
   u32 lo = MIN(st->anchor, st->focus), hi = MAX(st->anchor, st->focus);
-  if (lo != hi) selection(ui, d, &l, origin, lo, hi);
-  civue_rich_paint(ui, d, &l, origin, style, color);
+  if (lo != hi) selection(ui, d, &l, origin, lo, hi, colors.selection);
+  civue_rich_paint(ui, d, &l, origin, style, colors);
   f64 since = ui->now - st->blink;
   if (lo == hi && (u64)(since / 0.53) % 2 == 0) {
     civue_vec2 c = caret_pos(d, &l, st->focus);
     f32 line = l.boxes.v[block_at(d, st->focus)].line;
-    civue_fill(ui, rect_xywh(origin.x + c.x, origin.y + c.y, 1, line), color, 0);
+    civue_fill(ui, rect_xywh(origin.x + c.x, origin.y + c.y, 1, line), colors.text, 0);
   }
   civue_request_repaint_after(ui, 0.53 - fmod(since, 0.53));
   civue_rich_lay_free(&l);
