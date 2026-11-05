@@ -16,6 +16,9 @@ extern "C" {
 // faces an app registers while running, chosen by civue_text_style.display from 1 up to this.
 constexpr uint8_t CIVUE_TEXT_FACES = 2;
 
+// the faces text is set in when its style names none of the app's: the ui's, and the code one for `mono`.
+typedef enum : uint8_t { CIVUE_FACE_UI, CIVUE_FACE_CODE } civue_face;
+
 // how a run of text looks, sizes in logical points.
 typedef struct {
   float size, weight, line_height, letter_spacing;
@@ -106,6 +109,8 @@ void civue_text_end_frame(civue_text_system *t);
 // registers the font file in `data` as face `display`, from 1 to CIVUE_TEXT_FACES. what was laid out is laid out
 // again.
 void civue_text_register_display(civue_text_system *t, uint8_t display, const uint8_t *data, size_t n);
+// replaces the ui or the code face with the font file in `data`, copied. what was laid out is laid out again.
+void civue_text_set_face(civue_text_system *t, civue_face face, const uint8_t *data, size_t n);
 
 #ifdef __cplusplus
 }

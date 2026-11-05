@@ -139,18 +139,18 @@ void civue_text_free(civue_text_system *t) {
   own_free(t);
 }
 
-void civue_text_register_display(civue_text_system *t, u8 display, const u8 *data, usize n) {
-  if (!display || display > CIVUE_TEXT_FACES) return;
-  Source *s = &t->sources.v[SRC_DISPLAY + display];
-  free((void *)s->data);
+// puts a copy of `data` in a source, forgetting the fonts and the layouts made from what it had.
+static void source_replace(civue_text_system *t, u32 src, const u8 *data, usize n) {
+  Source *s = &t->sources.v[src];
+  if (s->path) free((void *)s->data);
   u8 *copy = xmalloc(n);
   memcpy(copy, data, n);
   // owned like a file's bytes.
   free(s->path);
   s->path = xstrdup("");
+  s->index = 0;
   source_set(s, copy, n);
-  // fonts made from the old bytes go, and text laid out with them.
-  vec_each(&t->fonts, f) if (f->source == SRC_DISPLAY + display) {
+  vec_each(&t->fonts, f) if (f->source == src) {
     hb_font_destroy(f->hb);
     if (f->ft) FT_Done_Face(f->ft);
     f->hb = nullptr;
@@ -167,6 +167,15 @@ void civue_text_register_display(civue_text_system *t, u8 display, const u8 *dat
     map_put(&t->font_index, hash_bytes(bits, sizeof bits) | 1, i + 1);
   }
   forget_layouts(t);
+}
+
+void civue_text_register_display(civue_text_system *t, u8 display, const u8 *data, usize n) {
+  if (!display || display > CIVUE_TEXT_FACES) return;
+  source_replace(t, SRC_DISPLAY + display, data, n);
+}
+
+void civue_text_set_face(civue_text_system *t, civue_face face, const u8 *data, usize n) {
+  source_replace(t, face == CIVUE_FACE_CODE ? SRC_MONO : SRC_INTER, data, n);
 }
 
 // a face the system has, its bytes read once, nullptr when unreadable.

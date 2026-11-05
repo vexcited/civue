@@ -121,6 +121,17 @@ void civue_text_register_display(civue_text_system *t, u8 display, const u8 *dat
   forget_layouts(t);
 }
 
+void civue_text_set_face(civue_text_system *t, civue_face face, const u8 *data, usize n) {
+  CFDataRef d = CFDataCreate(nullptr, data, n);
+  CTFontDescriptorRef desc = CTFontManagerCreateFontDescriptorFromData(d);
+  CFRelease(d);
+  if (!desc) return;
+  CTFontDescriptorRef *slot = face == CIVUE_FACE_CODE ? &t->mono : &t->inter;
+  CFRelease(*slot);
+  *slot = desc;
+  forget_layouts(t);
+}
+
 // the index of a font, kept for the glyphs drawn with it.
 static u32 font_of(civue_text_system *t, CTFontRef font) {
   u64 h = (u64)CFHash(font) | 1;
