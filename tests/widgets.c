@@ -314,7 +314,7 @@ static void fields(civue_gfx *g) {
     at(40, 52, f == 1);
     type(typed[f] ? typed[f] : "");
     begin();
-    civue_text_field_with(ui, civue_id_of("name"), r, &value, "Name", civue_style(11, 450, 16, 0), look);
+    civue_text_field(ui, civue_id_of("name"), r, &value, "Name", civue_style(11, 450, 16, 0), look);
     civue_end_frame(ui);
   }
   CHECK(value && !strcmp(value, "ada"));

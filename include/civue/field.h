@@ -35,15 +35,10 @@ typedef struct {
   civue_color placeholder, selection;
 } civue_field_look;
 
-// the panels' fields.
-civue_field_look civue_field_look_panel(const civue_theme *t);
-
 // a single line text field editing `*value`, a malloc'd string replaced
 // when it changes, nullptr for empty.
 civue_field_response civue_text_field(civue_ui *ui, civue_id id, civue_rect r, char **value, const char *placeholder,
-                                      civue_text_style style);
-civue_field_response civue_text_field_with(civue_ui *ui, civue_id id, civue_rect r, char **value,
-                                           const char *placeholder, civue_text_style style, civue_field_look look);
+                                      civue_text_style style, civue_field_look look);
 // several lines wrapped to the field's width from its top: enter starts a
 // line and the arrows move between them.
 civue_field_response civue_text_area(civue_ui *ui, civue_id id, civue_rect r, char **value, const char *placeholder,

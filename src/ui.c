@@ -10,9 +10,6 @@ typedef struct {
 civue_ui *civue_ui_new_sized(civue_gfx *gfx, f32 scale, usize size) {
   civue_ui *ui = own_new(MAX(size, sizeof *ui));
   ui->gfx = gfx;
-  ui->light = &civue_theme_light;
-  ui->dark = &civue_theme_dark;
-  ui->theme = civue_theme_light;
   ui->text = civue_text_new();
   ui->icons = civue_icons_new();
   ui->scale = scale;
@@ -100,8 +97,7 @@ void civue_begin_frame(civue_ui *ui, civue_vec2 size, f32 scale, civue_input *in
   input->mods = taken.mods;
   input->pressure = taken.pressure;
 
-  bool dark = ui->theme_pref == CIVUE_THEME_SYSTEM ? ui->system_dark : ui->theme_pref == CIVUE_THEME_DARK_PREF;
-  ui->theme = *(dark ? ui->dark : ui->light);
+  ui->dark = ui->appearance == CIVUE_APPEARANCE_SYSTEM ? ui->system_dark : ui->appearance == CIVUE_APPEARANCE_DARK;
   ui->now = now_s();
   civue_dl_clear(&ui->base);
   civue_dl_clear(&ui->overlay);

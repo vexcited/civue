@@ -11,7 +11,6 @@
 #include <civue/rich.h>
 #include <civue/system.h>
 #include <civue/text.h>
-#include <civue/theme.h>
 #include <civue/ui.h>
 #include <civue/widgets.h>
 #include <civue/window.h>

@@ -184,7 +184,7 @@ static void place_glass(void) {
   if (memcmp(&at, &want_at, sizeof at)) msg1(void, W.glass, "setFrame:", want_at);
 }
 
-// the window, its buttons and title bar follow the app's theme.
+// the window, its buttons and title bar follow the app's appearance.
 static void set_window_dark(bool dark) {
   id appearance =
       msg1(id, CLS("NSAppearance"), "appearanceNamed:", dark ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua);
@@ -224,9 +224,9 @@ static void frame(id texture, id drawable) {
     civue_ui *ui = W.ui;
     civue_color background = W.app_cb.background ? W.app_cb.background(W.app_cb.ctx) : color_hex(0x1e1e1e);
     if (W.options.titlebar > 0) {
-      if (W.window_dark != (int)ui->theme.dark) {
-        W.window_dark = ui->theme.dark;
-        set_window_dark(ui->theme.dark);
+      if (W.window_dark != (int)ui->dark) {
+        W.window_dark = ui->dark;
+        set_window_dark(ui->dark);
       }
       // in full screen the strip has the traffic lights, without it there
       // are none in the title bar nor room kept for them.

@@ -28,7 +28,7 @@ static const civue_text_style BODY = {.size = 13, .weight = 400, .line_height = 
 static void frame(void *ctx, civue_ui *ui) {
   Hello *h = ctx;
   Look k = look_of(h->dark);
-  ui->theme_pref = h->dark ? CIVUE_THEME_DARK_PREF : CIVUE_THEME_LIGHT_PREF;
+  ui->appearance = h->dark ? CIVUE_APPEARANCE_DARK : CIVUE_APPEARANCE_LIGHT;
   civue_rect panel = xywh(24, 24, 320, 248);
   fill(ui, panel, k.panel, 12);
   clipped(ui, panel) {
@@ -72,7 +72,7 @@ static void frame(void *ctx, civue_ui *ui) {
                               .placeholder = k.faint,
                               .selection = civue_alpha(k.accent, .3f)};
     field.idle.border = field.hovered.border = k.track;
-    civue_text_field_with(ui, id("name"), xywh(48, 200, 200, 28), &h->name, "Your name", BODY, field);
+    text_field(ui, id("name"), xywh(48, 200, 200, 28), &h->name, "Your name", BODY, field);
     if (h->name) {
       char hi[96];
       snprintf(hi, sizeof hi, "Hi %s.", h->name);

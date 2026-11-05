@@ -14,9 +14,9 @@ static civue_response button(civue_ui *ui, civue_input *in, bool down) {
   in->down[0] = down;
   civue_begin_frame(ui, civue_v2(100, 100), 2, in);
   civue_response r = civue_interact(ui, civue_id_of("button"), civue_rect_xywh(10, 10, 20, 20), CIVUE_SENSE_CLICK);
-  civue_fill(ui, r.rect, ui->theme.bg_brand, CIVUE_RADIUS_MEDIUM);
-  civue_icon_centered(ui, CIVUE_ICON_CHECK, r.rect, 16, ui->theme.icon_onbrand);
-  civue_text(ui, "ok", CIVUE_BODY, civue_v2(40, 10), ui->theme.text);
+  civue_fill(ui, r.rect, civue_hex(0x0d99ff), 5);
+  civue_icon_centered(ui, CIVUE_ICON_CHECK, r.rect, 16, CIVUE_WHITE);
+  civue_text(ui, "ok", civue_style(11, 450, 16, 0), civue_v2(40, 10), CIVUE_BLACK);
   civue_end_frame(ui);
   return r;
 }

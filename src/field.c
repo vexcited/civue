@@ -15,17 +15,6 @@ typedef struct {
   f32 goal;
 } Field;
 
-civue_field_look civue_field_look_panel(const civue_theme *t) {
-  return (civue_field_look){
-      .pad = 8,
-      .editing = {t->bg, t->border_selected, 1, CIVUE_RADIUS_MEDIUM, t->text},
-      .idle = {t->bg_secondary, CIVUE_CLEAR, 1, CIVUE_RADIUS_MEDIUM, t->text},
-      .hovered = {t->bg_secondary, t->border, 1, CIVUE_RADIUS_MEDIUM, t->text},
-      .placeholder = t->text_tertiary,
-      .selection = t->bg_selected_hover,
-  };
-}
-
 static void drop_field(void *p) {
   Field *f = p;
   vec_free(&f->text);
@@ -377,12 +366,7 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r, 
 }
 
 civue_field_response civue_text_field(civue_ui *ui, civue_id id, civue_rect r, char **value, const char *placeholder,
-                                      civue_text_style style) {
-  return civue_text_field_with(ui, id, r, value, placeholder, style, civue_field_look_panel(&ui->theme));
-}
-
-civue_field_response civue_text_field_with(civue_ui *ui, civue_id id, civue_rect r, char **value,
-                                           const char *placeholder, civue_text_style style, civue_field_look look) {
+                                      civue_text_style style, civue_field_look look) {
   return edit_field(ui, id, r, value, placeholder, style, look, false);
 }
 

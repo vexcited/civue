@@ -118,7 +118,7 @@ civue_num_change civue_num_field(civue_ui *ui, civue_id id, civue_rect r, f32 la
   bool escaped = civue_key_pressed(ui, CIVUE_KEY_ESCAPE);
   char *text = st->text ? st->text : xstrdup("");
   st->text = nullptr;
-  civue_field_response fr = civue_text_field_with(ui, id, r, &text, "", look->style, look->field);
+  civue_field_response fr = civue_text_field(ui, id, r, &text, "", look->style, look->field);
   const f64 *current = mixed ? nullptr : &value;
   if (step != 0) {
     f64 base = 0;

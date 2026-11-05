@@ -4,7 +4,6 @@
 #include <civue/gfx.h>
 #include <civue/icons.h>
 #include <civue/text.h>
-#include <civue/theme.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -15,7 +14,8 @@ extern "C" {
 /* an animation or the app asks. coordinates are logical points unless said otherwise.                        */
 /* ========================================================================================================== */
 
-typedef enum : uint8_t { CIVUE_THEME_SYSTEM, CIVUE_THEME_LIGHT_PREF, CIVUE_THEME_DARK_PREF } civue_theme_pref;
+// whether the app looks light or dark: as the system does, or one of them whatever the system does.
+typedef enum : uint8_t { CIVUE_APPEARANCE_SYSTEM, CIVUE_APPEARANCE_LIGHT, CIVUE_APPEARANCE_DARK } civue_appearance;
 
 // identifies a widget across frames, made from a name and the ids of what holds it.
 typedef uint64_t civue_id;
@@ -168,10 +168,9 @@ typedef struct civue_ui civue_ui;
 typedef struct civue_scroll_state civue_scroll_state;
 struct civue_ui {
   civue_gfx *gfx;
-  // the colors this frame draws with, `light` or `dark` by theme_pref and the system.
-  civue_theme theme;
-  civue_theme_pref theme_pref;
-  bool system_dark;
+  civue_appearance appearance;
+  // whether the system looks dark, and this frame does, by `appearance`. the window follows `dark`.
+  bool system_dark, dark;
   civue_text_system *text;
   civue_icons *icons;
   civue_draw_list base, overlay, combined;
@@ -221,8 +220,6 @@ struct civue_ui {
   bool window_controls, window_maximized;
   civue_title_button titlebar_start[4], titlebar_end[4];
   bool minimize_window, close_window;
-  // the themes for each look, the built in ones unless the app sets its own.
-  const civue_theme *light, *dark;
   // paints the bars of a scroll area as civue_scroll_end ends it, nothing when null.
   void (*scrollbars)(civue_ui *ui, const civue_scroll_state *s);
 #ifdef CIVUE_UI_FIELDS
