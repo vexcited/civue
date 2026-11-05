@@ -5,14 +5,6 @@
 #include <CoreText/CoreText.h>
 #include <stdlib.h>
 
-// the ui faces, built in.
-static const u8 INTER[] = {
-#embed "../../assets/fonts/InterV.ttf"
-};
-static const u8 ROBOTO_MONO[] = {
-#embed "../../assets/fonts/RobotoMonoVariable.ttf"
-};
-
 // horizontal positions a glyph is rasterized at within a pixel.
 constexpr u32 SUBPIXELS = 4;
 constexpr u32 WGHT = 0x77676874;
@@ -46,7 +38,8 @@ typedef struct {
 } MadeFont;
 
 struct civue_text_system {
-  CTFontDescriptorRef inter, mono, display[CIVUE_TEXT_FACES + 1];
+  // the ui and the code faces, the system's until the app sets its own.
+  CTFontDescriptorRef ui, code, display[CIVUE_TEXT_FACES + 1];
   // fonts by index, keyed by their face, size and variation.
   Vec(Font) fonts;
   civue_map font_index; // CFHash of a font to index + 1, CFEqual checked.
@@ -61,17 +54,17 @@ struct civue_text_system {
   u64 frame;
 };
 
-static CTFontDescriptorRef descriptor(const u8 *p, usize n) {
-  CFDataRef data = CFDataCreateWithBytesNoCopy(nullptr, p, n, kCFAllocatorNull);
-  CTFontDescriptorRef d = CTFontManagerCreateFontDescriptorFromData(data);
-  CFRelease(data);
+static CTFontDescriptorRef system_face(CTFontUIFontType type) {
+  CTFontRef font = CTFontCreateUIFontForLanguage(type, 0, nullptr);
+  CTFontDescriptorRef d = CTFontCopyFontDescriptor(font);
+  CFRelease(font);
   return d;
 }
 
 civue_text_system *civue_text_new(void) {
   civue_text_system *t = own_new(sizeof *t);
-  t->inter = descriptor(INTER, sizeof INTER);
-  t->mono = descriptor(ROBOTO_MONO, sizeof ROBOTO_MONO);
+  t->ui = system_face(kCTFontUIFontSystem);
+  t->code = system_face(kCTFontUIFontUserFixedPitch);
   return t;
 }
 
@@ -102,8 +95,8 @@ void civue_text_free(civue_text_system *t) {
   map_free(&t->font_index);
   vec_free(&t->glyphs);
   map_free(&t->glyph_index);
-  CFRelease(t->inter);
-  CFRelease(t->mono);
+  CFRelease(t->ui);
+  CFRelease(t->code);
   for (u32 i = 0; i <= CIVUE_TEXT_FACES; i++)
     if (t->display[i]) CFRelease(t->display[i]);
   own_free(t);
@@ -126,7 +119,7 @@ void civue_text_set_face(civue_text_system *t, civue_face face, const u8 *data, 
   CTFontDescriptorRef desc = CTFontManagerCreateFontDescriptorFromData(d);
   CFRelease(d);
   if (!desc) return;
-  CTFontDescriptorRef *slot = face == CIVUE_FACE_CODE ? &t->mono : &t->inter;
+  CTFontDescriptorRef *slot = face == CIVUE_FACE_CODE ? &t->code : &t->ui;
   CFRelease(*slot);
   *slot = desc;
   forget_layouts(t);
@@ -149,7 +142,7 @@ static u32 font_of(civue_text_system *t, CTFontRef font) {
 }
 
 static CTFontRef make_font(civue_text_system *t, civue_text_style s, f32 scale) {
-  CTFontDescriptorRef base = s.mono ? t->mono : t->inter;
+  CTFontDescriptorRef base = s.mono ? t->code : t->ui;
   if (s.display && t->display[s.display]) base = t->display[s.display];
   CFMutableDictionaryRef attrs =
       CFDictionaryCreateMutable(nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);

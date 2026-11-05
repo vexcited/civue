@@ -9,8 +9,8 @@ extern "C" {
 
 /* ========================================================================================================== */
 /* text. laid out once per text, style and scale with core text on macos and harfbuzz on linux, its glyphs    */
-/* rasterized into the renderer's atlases as they are first drawn. inter is the ui face, roboto mono the code */
-/* one, both built in.                                                                                        */
+/* rasterized into the renderer's atlases as they are first drawn. the ui and the code faces are the          */
+/* system's ui font and its monospace one until the app sets its own with civue_text_set_face.                */
 /* ========================================================================================================== */
 
 // faces an app registers while running, chosen by civue_text_style.display from 1 up to this.

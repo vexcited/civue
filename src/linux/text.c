@@ -12,19 +12,12 @@
 #include <math.h>
 #include <stdlib.h>
 
-// the ui faces, built in.
-static const u8 INTER[] = {
-#embed "../../assets/fonts/InterV.ttf"
-};
-static const u8 ROBOTO_MONO[] = {
-#embed "../../assets/fonts/RobotoMonoVariable.ttf"
-};
-
 // horizontal positions a glyph is rasterized at within a pixel.
 constexpr u32 SUBPIXELS = 4;
 constexpr u32 WGHT = 0x77676874;
-// faces of the ui and of the system, by where their bytes are.
-enum { SRC_INTER, SRC_MONO, SRC_DISPLAY, SRC_EMOJI = SRC_DISPLAY + CIVUE_TEXT_FACES + 1 };
+// faces of the ui and of the system, by where their bytes are. the ui and the code ones are empty until the app
+// sets them, the system's faces standing in.
+enum { SRC_UI, SRC_CODE, SRC_DISPLAY, SRC_EMOJI = SRC_DISPLAY + CIVUE_TEXT_FACES + 1 };
 
 typedef struct {
   // built in or registered bytes, else a file and its index.
@@ -69,6 +62,8 @@ struct civue_text_system {
   Vec(Source) sources;
   // the system's faces for code points the ui faces lack, by code point.
   civue_map fallback;
+  // the system's sans-serif and monospace faces by weight, while the app sets none.
+  civue_map system;
   bool emoji_looked;
   Vec(Font) fonts;
   civue_map font_index;
@@ -94,8 +89,6 @@ civue_text_system *civue_text_new(void) {
   if (FT_Init_FreeType(&t->ft)) die("freetype: no library");
   FcInit();
   for (u32 i = 0; i < SRC_EMOJI + 1; i++) vec_push(&t->sources, (Source){});
-  source_set(&t->sources.v[SRC_INTER], INTER, sizeof INTER);
-  source_set(&t->sources.v[SRC_MONO], ROBOTO_MONO, sizeof ROBOTO_MONO);
   return t;
 }
 
@@ -133,6 +126,7 @@ void civue_text_free(civue_text_system *t) {
   }
   vec_free(&t->sources);
   map_free(&t->fallback);
+  map_free(&t->system);
   vec_free(&t->glyphs);
   map_free(&t->glyph_index);
   FT_Done_FreeType(t->ft);
@@ -175,7 +169,7 @@ void civue_text_register_display(civue_text_system *t, u8 display, const u8 *dat
 }
 
 void civue_text_set_face(civue_text_system *t, civue_face face, const u8 *data, usize n) {
-  source_replace(t, face == CIVUE_FACE_CODE ? SRC_MONO : SRC_INTER, data, n);
+  source_replace(t, face == CIVUE_FACE_CODE ? SRC_CODE : SRC_UI, data, n);
 }
 
 // a face the system has, its bytes read once, nullptr when unreadable.
@@ -231,6 +225,34 @@ static bool covers(const Source *s, u32 cp) {
   bool has = hb_font_get_nominal_glyph(f, cp, &g);
   hb_font_destroy(f);
   return has;
+}
+
+// the face text in the ui or the code face is set in at `weight`: the app's, or the system's sans-serif or monospace
+// nearest the weight.
+static u32 face_source(civue_text_system *t, bool code, f32 weight) {
+  u32 src = code ? SRC_CODE : SRC_UI;
+  if (t->sources.v[src].hb) return src;
+  u64 key = ((u64)code << 32 | (u32)lroundf(weight)) + 1, v;
+  if (map_get(&t->system, key, &v)) return (u32)v;
+  FcPattern *p = FcPatternCreate();
+  FcPatternAddString(p, FC_FAMILY, (const FcChar8 *)(code ? "monospace" : "sans-serif"));
+  FcPatternAddDouble(p, FC_WEIGHT, FcWeightFromOpenTypeDouble(weight));
+  FcConfigSubstitute(nullptr, p, FcMatchPattern);
+  FcDefaultSubstitute(p);
+  FcResult r;
+  FcPattern *m = FcFontMatch(nullptr, p, &r);
+  FcChar8 *file;
+  u32 found = src;
+  if (m && FcPatternGetString(m, FC_FILE, 0, &file) == FcResultMatch) {
+    int index = 0;
+    FcPatternGetInteger(m, FC_INDEX, 0, &index);
+    u32 at = file_source(t, (const char *)file, (u32)index, false);
+    if (at != UINT32_MAX) found = at;
+  }
+  if (m) FcPatternDestroy(m);
+  FcPatternDestroy(p);
+  map_put(&t->system, key, found);
+  return found;
 }
 
 // a system face for a code point no ui face has, UINT32_MAX for none.
@@ -367,7 +389,7 @@ static civue_text_block *build(civue_text_system *t, const char *s, usize n, civ
   vec_push(&at, (u32)n);
   u32 count = cps.len;
   f32 px = st.size * scale;
-  u32 base = st.mono ? SRC_MONO : SRC_INTER;
+  u32 base = face_source(t, st.mono, st.weight);
   if (st.display && t->sources.v[SRC_DISPLAY + st.display].hb) base = SRC_DISPLAY + st.display;
   if (st.emoji) find_emoji(t);
   u32 base_font = font_of(t, base, px, st.weight);
