@@ -11,9 +11,8 @@
 #undef fill
 #undef label
 #undef button
-#undef checkbox
+#undef toggle
 #undef slider
 #undef text_field
 #undef tooltip
-#undef spinner
 #undef CIVUE_DSL_H

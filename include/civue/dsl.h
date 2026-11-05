@@ -18,10 +18,9 @@
 #define fill(...) civue_fill(__VA_ARGS__)
 #define label(...) civue_text(__VA_ARGS__)
 #define button(...) civue_button(__VA_ARGS__)
-#define checkbox(...) civue_checkbox(__VA_ARGS__)
+#define toggle(...) civue_toggle(__VA_ARGS__)
 #define slider(...) civue_slider(__VA_ARGS__)
 #define text_field(...) civue_text_field(__VA_ARGS__)
 #define tooltip(...) civue_tooltip(__VA_ARGS__)
-#define spinner(...) civue_spinner(__VA_ARGS__)
 
 #endif

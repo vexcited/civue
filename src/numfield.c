@@ -1,6 +1,5 @@
 #include "internal.h"
 
-#include <civue/field.h>
 #include <civue/numfield.h>
 
 // what a number field keeps between frames.
@@ -19,10 +18,6 @@ static NumState *num_state(civue_ui *ui, civue_id id) {
 }
 
 static bool *flag(civue_ui *ui, const char *name) { return civue_memory(ui, civue_id_of(name), sizeof(bool), nullptr); }
-
-void civue_num_field_faint(civue_ui *ui) { *flag(ui, "num-field-faint") = true; }
-
-void civue_num_field_blank(civue_ui *ui) { *flag(ui, "num-field-blank") = true; }
 
 void civue_num_field_variable(civue_ui *ui) { *flag(ui, "num-field-variable") = true; }
 
@@ -44,20 +39,12 @@ static char **typed_slot(civue_ui *ui, civue_id id) {
   return civue_memory(ui, civue_ids(id, "typed"), sizeof(char *), drop_typed);
 }
 
-civue_num_change civue_num_field(civue_ui *ui, civue_id id, civue_rect r, civue_label label, f64 value, bool mixed,
-                                 civue_num_format show) {
-  bool *faint_flag = flag(ui, "num-field-faint");
-  bool faint = *faint_flag;
-  *faint_flag = false;
-  bool *blank_flag = flag(ui, "num-field-blank");
-  bool blank = *blank_flag;
-  *blank_flag = false;
+civue_num_change civue_num_field(civue_ui *ui, civue_id id, civue_rect r, f32 label_w, f64 value, bool mixed,
+                                 const char *shown, civue_num_format show, const civue_num_look *look) {
   bool *variable_flag = flag(ui, "num-field-variable");
   bool variable = *variable_flag;
   *variable_flag = false;
-  const civue_theme *th = &ui->theme;
   civue_num_change out = {};
-  f32 label_w = label.kind == CIVUE_LABEL_NONE ? 0 : 24;
   civue_rect lr = rect(r.x0, r.y0, r.x0 + label_w, r.y1);
   bool focused = ui->focus == id;
   // the label scrubs.
@@ -82,26 +69,10 @@ civue_num_change civue_num_field(civue_ui *ui, civue_id id, civue_rect r, civue_
   }
   // the value types.
   civue_rect vr = rect(r.x0 + label_w, r.y0, r.x1, r.y1);
-  char shown[64];
-  if (!mixed)
-    show(value, shown, sizeof shown);
-  else
-    snprintf(shown, sizeof shown, "%s", blank ? "" : "Mixed");
   NumState *st = num_state(ui, id);
   if (!focused && !st->text) {
     civue_response resp = civue_interact(ui, id, vr, CIVUE_SENSE_CLICK);
-    civue_fill_stroke(ui, r, th->bg_secondary, resp.hovered ? th->border : CIVUE_CLEAR, 1, CIVUE_RADIUS_MEDIUM);
-    switch (label.kind) {
-    case CIVUE_LABEL_TEXT:
-      civue_text_in(ui, label.text, CIVUE_BODY_REGULAR, lr, th->text_secondary, CIVUE_ALIGN_CENTER);
-      break;
-    case CIVUE_LABEL_STRONG: civue_text_in(ui, label.text, CIVUE_BODY_REGULAR, lr, th->text, CIVUE_ALIGN_CENTER); break;
-    case CIVUE_LABEL_ICON: civue_icon_centered(ui, label.icon, lr, 16, th->icon_secondary); break;
-    case CIVUE_LABEL_NONE: break;
-    }
-    // figma's mixed reads like a value, faint only where asked.
-    civue_text_in(ui, shown, CIVUE_BODY, rect(vr.x0 + (label_w > 0 ? 0 : 8), r.y0, r.x1 - 8, r.y1),
-                  faint ? th->text_tertiary : th->text, CIVUE_ALIGN_START);
+    if (look->idle) look->idle(ui, look->ctx, r, lr, vr, shown, resp.hovered);
     if (resp.pressed) {
       ui->focus = id;
       civue_claim_focus(ui);
@@ -147,7 +118,7 @@ civue_num_change civue_num_field(civue_ui *ui, civue_id id, civue_rect r, civue_
   bool escaped = civue_key_pressed(ui, CIVUE_KEY_ESCAPE);
   char *text = st->text ? st->text : xstrdup("");
   st->text = nullptr;
-  civue_field_response fr = civue_text_field(ui, id, r, &text, "", CIVUE_BODY);
+  civue_field_response fr = civue_text_field_with(ui, id, r, &text, "", look->style, look->field);
   const f64 *current = mixed ? nullptr : &value;
   if (step != 0) {
     f64 base = 0;
@@ -302,26 +273,14 @@ typedef struct {
   u32 n;
 } Held;
 
-bool civue_steppers(civue_ui *ui, civue_id id, civue_rect field, f64 value, f64 step, f64 big, f64 min, f64 max,
-                    f64 *out) {
-  const civue_theme *th = &ui->theme;
-  bool fired_any = false;
-  f64 now_value = value;
-  f32 x = field.x1 - 24;
-  struct {
-    civue_rect r;
-    f64 dir;
-    civue_icon icon;
-    f32 nudge;
-  } halves[2] = {
-      {rect(x, field.y0, field.x1, field.y0 + 12), 1, CIVUE_ICON_CARET_UP, 1},
-      {rect(x, field.y0 + 12, field.x1, field.y1), -1, CIVUE_ICON_CARET_DOWN, -1},
-  };
+civue_steppers_state civue_steppers(civue_ui *ui, civue_id id, civue_rect up, civue_rect down, f64 value, f64 step,
+                                    f64 big, f64 min, f64 max) {
+  civue_steppers_state s = {.at_max = value >= max, .at_min = value <= min, .value = value};
+  civue_rect halves[2] = {up, down};
   for (u32 k = 0; k < 2; k++) {
-    civue_rect r = halves[k].r;
-    f64 dir = halves[k].dir;
-    civue_response resp = civue_interact(ui, civue_idn(civue_ids(id, "stepper"), k), r, CIVUE_SENSE_DRAG);
-    bool stuck = dir > 0 ? value >= max : value <= min;
+    f64 dir = k ? -1 : 1;
+    civue_response resp = civue_interact(ui, civue_idn(civue_ids(id, "stepper"), k), halves[k], CIVUE_SENSE_DRAG);
+    *(k ? &s.down : &s.up) = resp;
     f64 now = ui->now;
     Held *held = civue_memory(ui, civue_idn(civue_ids(id, "stepper-held"), k), sizeof(Held), nullptr);
     bool fire = resp.pressed;
@@ -341,15 +300,10 @@ bool civue_steppers(civue_ui *ui, civue_id id, civue_rect field, f64 value, f64 
       held->held = false;
     }
     if (fire) {
-      f64 s = ui->input.mods & CIVUE_MOD_SHIFT ? big : step;
-      now_value = fmax(fmin((round(now_value / s) + dir) * s, max), min);
-      fired_any = true;
+      f64 by = ui->input.mods & CIVUE_MOD_SHIFT ? big : step;
+      s.value = fmax(fmin((round(s.value / by) + dir) * by, max), min);
+      s.stepped = true;
     }
-    civue_color color = (resp.hovered || resp.dragging) && !stuck ? th->icon : th->icon_secondary;
-    // figma nudges each chevron a point toward the middle, back when pressed.
-    f32 lift = resp.dragging && !stuck ? 0 : halves[k].nudge;
-    civue_icon_at(ui, halves[k].icon, rect_xywh(x + 4, r.y0 - 2 + lift, 16, 16), color);
   }
-  if (fired_any) *out = now_value;
-  return fired_any;
+  return s;
 }

@@ -279,14 +279,14 @@ bool civue_shortcut(civue_ui *ui, u32 key, bool shift) {
 // ---- state ----
 
 // ease out cubic, how the ui settles.
-static f32 civue_ease(f32 t) {
+static f32 settle(f32 t) {
   f32 u = 1 - t;
   return 1 - u * u * u;
 }
 
 static f32 anim_at(const civue_anim *a, f64 now) {
   f32 t = (f32)fmin((now - a->start) / fmax(a->duration, 1e-3), 1);
-  return a->from + (a->to - a->from) * civue_ease(t);
+  return a->from + (a->to - a->from) * settle(t);
 }
 
 static f32 animate(civue_ui *ui, civue_id id, bool has_from, f32 from, f32 target, f32 seconds) {
@@ -331,6 +331,25 @@ void civue_forget(civue_ui *ui, civue_id id) {
   own_free(m);
   map_del(&ui->memory, id);
 }
+
+static f32 bezier_at(f32 a, f32 b, f32 s) {
+  return 3 * a * s * (1 - s) * (1 - s) + 3 * b * s * s * (1 - s) + s * s * s;
+}
+
+f32 civue_cubic_bezier(f32 x1, f32 y1, f32 x2, f32 y2, f32 t) {
+  t = fminf(fmaxf(t, 0), 1);
+  f32 lo = 0, hi = 1;
+  for (u32 i = 0; i < 24; ++i) {
+    f32 mid = (lo + hi) / 2;
+    if (bezier_at(x1, x2, mid) < t)
+      lo = mid;
+    else
+      hi = mid;
+  }
+  return bezier_at(y1, y2, (lo + hi) / 2);
+}
+
+f32 civue_ease(f32 t) { return civue_cubic_bezier(.25, .1, .25, 1, t); }
 
 // ---- painting ----
 
@@ -404,6 +423,13 @@ void civue_image(civue_ui *ui, civue_texture t, civue_rect r, const f32 uv[4], f
 
 void civue_image_px(civue_ui *ui, civue_texture t, civue_rect r, const f32 uv[4], bool nearest) {
   civue_dl_image(civue_list(ui), t, r, uv, 1, 0, nearest);
+}
+
+void civue_fade_out(civue_ui *ui, civue_rect r, civue_color color) {
+  for (f64 y = r.y0; y < r.y1; y += 2) {
+    color.a = (f32)fmin(fmax((y + 1 - r.y0) / rect_h(r), 0), 1);
+    civue_fill(ui, rect(r.x0, y, r.x1, fmin(y + 2, r.y1)), color, 0);
+  }
 }
 
 void civue_icon_at(civue_ui *ui, civue_icon icon, civue_rect r, civue_color c) {

@@ -165,6 +165,7 @@ typedef enum : uint8_t {
 } civue_title_button;
 
 typedef struct civue_ui civue_ui;
+typedef struct civue_scroll_state civue_scroll_state;
 struct civue_ui {
   civue_gfx *gfx;
   // the colors this frame draws with, `light` or `dark` by theme_pref and the system.
@@ -222,6 +223,8 @@ struct civue_ui {
   bool minimize_window, close_window;
   // the themes for each look, the built in ones unless the app sets its own.
   const civue_theme *light, *dark;
+  // paints the bars of a scroll area as civue_scroll_end ends it, nothing when null.
+  void (*scrollbars)(civue_ui *ui, const civue_scroll_state *s);
 #ifdef CIVUE_UI_FIELDS
   CIVUE_UI_FIELDS
 #endif
@@ -294,6 +297,9 @@ float civue_animate_from(civue_ui *ui, civue_id id, float from, float target, fl
 // same block after. `drop` frees what it holds when forgotten.
 void *civue_memory(civue_ui *ui, civue_id id, size_t size, void (*drop)(void *));
 void civue_forget(civue_ui *ui, civue_id id);
+// css's cubic-bezier timing function at `t`, and its `ease`.
+float civue_cubic_bezier(float x1, float y1, float x2, float y2, float t);
+float civue_ease(float t);
 
 /* ========================================================================================================== */
 /* painting, snapped to pixels.                                                                               */
@@ -317,6 +323,8 @@ void civue_image(civue_ui *ui, civue_texture t, civue_rect r, const float uv[4],
                  bool nearest);
 // an image placed in physical pixels.
 void civue_image_px(civue_ui *ui, civue_texture t, civue_rect r, const float uv[4], bool nearest);
+// `color` over `r` from clear at its top to opaque at its bottom, in bands two points tall.
+void civue_fade_out(civue_ui *ui, civue_rect r, civue_color color);
 
 // an icon filling `r`.
 void civue_icon_at(civue_ui *ui, civue_icon icon, civue_rect r, civue_color c);
