@@ -6,6 +6,10 @@
 
 #define CHECK(x) ((x) ? (void)0 : (fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #x), exit(1)))
 
+static const char CHECK_SVG[] = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\">"
+                                "<path d=\"M3 8l3 3 7-7\" stroke=\"#000\" stroke-width=\"2\" fill=\"none\"/></svg>";
+static const civue_icon_svg ICONS[] = {{CHECK_SVG, sizeof CHECK_SVG - 1}};
+
 static civue_response button(civue_ui *ui, civue_input *in, bool down) {
   in->has_mouse = true;
   in->mouse = civue_v2(15, 15);
@@ -15,7 +19,7 @@ static civue_response button(civue_ui *ui, civue_input *in, bool down) {
   civue_begin_frame(ui, civue_v2(100, 100), 2, in);
   civue_response r = civue_interact(ui, civue_id_of("button"), civue_rect_xywh(10, 10, 20, 20), CIVUE_SENSE_CLICK);
   civue_fill(ui, r.rect, civue_hex(0x0d99ff), 5);
-  civue_icon_centered(ui, CIVUE_ICON_CHECK, r.rect, 16, CIVUE_WHITE);
+  civue_icon_centered(ui, 0, r.rect, 16, CIVUE_WHITE);
   civue_text(ui, "ok", civue_style(11, 450, 16, 0), civue_v2(40, 10), CIVUE_BLACK);
   civue_end_frame(ui);
   return r;
@@ -29,6 +33,8 @@ int main(void) {
   }
   civue_gfx *g = civue_gfx_new(device);
   civue_ui *ui = civue_ui_new(g, 2);
+  civue_icons_use(ui->icons, ICONS, 1);
+  CHECK(civue_icon_natural_size(ui->icons, 0, &(float){0}, &(float){0}));
   civue_input in = {};
   button(ui, &in, false);
   CHECK(button(ui, &in, false).hovered);

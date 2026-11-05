@@ -8,8 +8,8 @@ extern "C" {
 #endif
 
 /* ========================================================================================================== */
-/* icons. svgs rasterized at device size into the coverage atlas and tinted when drawn. the app numbers its   */
-/* own from 0, civue's widgets draw a few built in ones numbered from CIVUE_ICON_BUILTIN.                     */
+/* icons. svgs rasterized at device size into the coverage atlas and tinted when drawn, the app's own,        */
+/* numbered from 0.                                                                                           */
 /* ========================================================================================================== */
 
 typedef uint16_t civue_icon;
@@ -18,19 +18,6 @@ typedef struct {
   const char *svg;
   size_t len;
 } civue_icon_svg;
-
-enum : civue_icon {
-  CIVUE_ICON_BUILTIN = 0xff00,
-  CIVUE_ICON_CARET_DOWN = CIVUE_ICON_BUILTIN,
-  CIVUE_ICON_CARET_UP,
-  CIVUE_ICON_CARET_RIGHT,
-  CIVUE_ICON_CHECK,
-  CIVUE_ICON_CLOSE,
-  CIVUE_ICON_SPINNER,
-  CIVUE_ICON_TOOLTIP_ARROW,
-  CIVUE_ICON_TOOLTIP_ARROW_LEFT,
-  CIVUE_ICON_TOOLTIP_ARROW_UP,
-};
 
 typedef struct civue_icons civue_icons;
 
