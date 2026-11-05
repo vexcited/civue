@@ -53,8 +53,11 @@ typedef struct {
   uint32_t cursor_pixels;
 } civue_window_options;
 
-// opens a window and runs the app `make` returns in it until it closes.
-void civue_window_run(const civue_window_options *o, civue_app (*make)(civue_ui *ui, void *arg), void *arg);
+// opens a window and runs the app `make` returns in it until it closes, its ui `ui_size` bytes as civue_ui_new_sized
+// makes it.
+void civue_window_run_sized(const civue_window_options *o, civue_app (*make)(civue_ui *ui, void *arg), void *arg,
+                            size_t ui_size);
+#define civue_window_run(o, make, arg) civue_window_run_sized(o, make, arg, sizeof(civue_ui))
 // asks the window for a frame, from any thread.
 void civue_window_wake(void);
 // what an item of the system's menu bar asks for, taken by the next frame from civue_input: a key pressed as if

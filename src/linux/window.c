@@ -1633,7 +1633,8 @@ static i32 next_wait(void) {
   return (i32)CLAMP(ceil((next - now_s()) * 1000), 0.0, 1e6);
 }
 
-void civue_window_run(const civue_window_options *o, civue_app (*make)(civue_ui *ui, void *arg), void *arg) {
+void civue_window_run_sized(const civue_window_options *o, civue_app (*make)(civue_ui *ui, void *arg), void *arg,
+                            size_t ui_size) {
   W.options = *o;
   W.input.pressure = -1;
   wake_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
@@ -1729,7 +1730,7 @@ void civue_window_run(const civue_window_options *o, civue_app (*make)(civue_ui 
 
   if (o->install_menus) o->install_menus();
   W.gfx = civue_gfx_new((void *)v);
-  W.ui = civue_ui_new(W.gfx, scale_factor());
+  W.ui = civue_ui_new_sized(W.gfx, scale_factor(), ui_size);
   if (o->icons) civue_icons_use(W.ui->icons, o->icons, o->nicons);
   civue__cursors_use(o);
   civue__cursors_set_scale(scale_factor());

@@ -222,9 +222,16 @@ struct civue_ui {
   bool minimize_window, close_window;
   // the themes for each look, the built in ones unless the app sets its own.
   const civue_theme *light, *dark;
+#ifdef CIVUE_UI_FIELDS
+  CIVUE_UI_FIELDS
+#endif
 };
 
-civue_ui *civue_ui_new(civue_gfx *gfx, float scale);
+// a ui of `size` bytes, zeroed: sizeof(civue_ui) where the app includes civue. an app keeps fields of its own at the
+// end of civue_ui by defining CIVUE_UI_FIELDS as their declarations before including civue, the same in every file
+// that does, and civue never reads them.
+civue_ui *civue_ui_new_sized(civue_gfx *gfx, float scale, size_t size);
+#define civue_ui_new(gfx, scale) civue_ui_new_sized(gfx, scale, sizeof(civue_ui))
 void civue_ui_free(civue_ui *ui);
 // starts a frame of `size` points. the input is taken, `input` left with
 // what carries over: buttons held, the pointer and the modifiers.

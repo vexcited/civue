@@ -7,8 +7,8 @@ typedef struct {
   alignas(16) u8 data[];
 } Memory;
 
-civue_ui *civue_ui_new(civue_gfx *gfx, f32 scale) {
-  civue_ui *ui = own_new(sizeof *ui);
+civue_ui *civue_ui_new_sized(civue_gfx *gfx, f32 scale, usize size) {
+  civue_ui *ui = own_new(MAX(size, sizeof *ui));
   ui->gfx = gfx;
   ui->light = &civue_theme_light;
   ui->dark = &civue_theme_dark;

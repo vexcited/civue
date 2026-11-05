@@ -967,7 +967,8 @@ static void key_changed(id self, SEL sel, id note) {
 
 static BOOL should_terminate_after_close(id self, SEL sel, id app) { return YES; }
 
-void civue_window_run(const civue_window_options *o, civue_app (*make)(civue_ui *ui, void *arg), void *arg) {
+void civue_window_run_sized(const civue_window_options *o, civue_app (*make)(civue_ui *ui, void *arg), void *arg,
+                            size_t ui_size) {
   void *pool = objc_autoreleasePoolPush();
   W.options = *o;
   W.input.pressure = -1;
@@ -1043,7 +1044,7 @@ void civue_window_run(const civue_window_options *o, civue_app (*make)(civue_ui 
   msg0(void, W.window, "center");
   resize_layer();
 
-  W.ui = civue_ui_new(W.gfx, scale_factor());
+  W.ui = civue_ui_new_sized(W.gfx, scale_factor(), ui_size);
   if (o->icons) civue_icons_use(W.ui->icons, o->icons, o->nicons);
   W.ui->titlebar_glass = W.glass != nullptr;
   if (W.glass) {
