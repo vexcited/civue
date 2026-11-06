@@ -1,7 +1,8 @@
 # civue
 
 *A window and a frame.* A native GUI toolkit for C23, part of CiKo: Metal and AppKit on macOS, Vulkan and Wayland
-on Linux, no other toolkit underneath.
+on Linux, no other toolkit underneath. Its widgets are headless, like Base UI's or GPUI's: civue handles the pointer,
+the keys, the focus and the geometry, and the app paints them.
 
 ```c
 #include <civue/dsl.h>
@@ -9,15 +10,20 @@ on Linux, no other toolkit underneath.
 typedef struct {
   int count;
   char *name;
+  civue_field_look look;                                       // the text field's colors, the app's own
 } Hello;
+
+static const civue_text_style BODY = {.size = 13, .weight = 400, .line_height = 20};
 
 static void frame(void *ctx, civue_ui *ui) {                   // runs when input, a timer or an animation asks
   Hello *h = ctx;
-  civue_floating(ui, xywh(24, 24, 320, 180), CIVUE_RADIUS_LARGE, ui->theme.bg, CIVUE_E200);
-  label(ui, "Hello from civue", CIVUE_HEADING_MEDIUM, pt(48, 44), ui->theme.text);
-  if (button(ui, id("add"), xywh(48, 84, 96, 28), "Click me", CIVUE_BUTTON_PRIMARY).clicked)
-    h->count++;
-  text_field(ui, id("name"), xywh(48, 128, 200, 28), &h->name, "Your name", CIVUE_BODY);
+  fill(ui, xywh(24, 24, 320, 180), CIVUE_WHITE, 12);
+  label(ui, "Hello from civue", BODY, pt(48, 44), CIVUE_BLACK);
+  civue_button_state add = button(ui, id("add"), xywh(48, 84, 96, 28));
+  fill(ui, add.response.rect, add.held ? rgb(0x0768cf) : rgb(0x0d99ff), 6);   // the app paints what it answers
+  civue_text_in(ui, "Click me", BODY, add.response.rect, CIVUE_WHITE, CIVUE_ALIGN_CENTER);
+  if (add.activated) h->count++;
+  text_field(ui, id("name"), xywh(48, 128, 200, 28), &h->name, "Your name", BODY, h->look);
   clipped(ui, xywh(48, 170, 200, 20)) { ... }                  // a block, what it draws is clipped
 }
 
@@ -30,16 +36,18 @@ int main(void) {
 }
 ```
 
-`examples/hello.c` is the whole app, with a theme switch, a slider and a tooltip. It builds with the tests.
+`examples/hello.c` is the whole app, with a dark switch, a slider and a tooltip, painting its own look in a few lines.
+It builds with the tests.
 
 | Dear ImGui | civue |
 | --- | --- |
 | `ImGui::NewFrame`, `ImGui::Render` | `civue_begin_frame`, `civue_end_frame`, or `civue_window_run` doing both |
 | `ImGui::GetID("x")`, `PushID` | `civue_id_of("x")`, `civue_ids(parent, "x")`, `civue_idn(parent, n)` |
-| `ImGui::Button`, `Checkbox`, `SliderFloat` | `civue_button`, `civue_checkbox`, `civue_slider` |
+| `ImGui::Button`, `Checkbox`, `SliderFloat` | `civue_button`, `civue_toggle`, `civue_slider`, answering with a state to paint |
+| `ImGui::RadioButton` | `civue_radio_group`, the arrows moving the choice while it has the focus |
 | `ImGui::InputText` | `civue_text_field`, `civue_text_area`, with input methods and the clipboard |
-| `ImGui::BeginPopup`, `BeginMenu` | `civue_menu`, `civue_menu_path` with submenus, `civue_select_menu` |
-| `ImGui::SetTooltip` | `civue_tooltip`, shown after half a second of hover |
+| `ImGui::BeginPopup`, `BeginMenu` | `civue_menu` with submenus, `civue_select_menu`, their rows painted by the app |
+| `ImGui::SetTooltip` | `civue_tooltip`, true after half a second of hover, `civue_tooltip_at` placing it |
 | `ImGui::BeginChild` with scrolling | `CIVUE_SCROLLING(ui, id, r, height, content) { ... }` |
 | `ImDrawList` | `civue_draw_list`, instanced quads with clips and turns |
 | `ImGui::GetStateStorage` | `civue_memory(ui, id, size, drop)`, forgotten with `civue_forget` |
@@ -56,10 +64,10 @@ The short names come from `<civue/dsl.h>`: `id`, `rgb`, `pt`, `xywh`, the blocks
 | `base.h` | points, rects and colors, growable arrays, hashing, utf-8, the clock |
 | `gpu.h` | the process's gpu device, `objc.h` and `metal.h` on macOS, `vulkan.h` on Linux |
 | `draw.h`, `gfx.h` | draw lists and atlases, and the renderer drawing them, offscreen too with `civue_gfx_snapshot` |
-| `text.h` | layout and rendering, Inter and Roboto Mono built in, faces registered while running |
-| `icons.h`, `theme.h` | svg icons tinted from an atlas, the light, dark and high contrast themes and the type scale |
-| `ui.h` | frames, input, ids, interaction, focus, animation, painting snapped to pixels |
-| `widgets.h`, `field.h`, `numfield.h`, `rich.h` | controls, text fields, number fields, rich text editing |
+| `text.h` | layout and rendering in the system's faces, or faces the app sets from font files |
+| `icons.h` | the app's svg icons, tinted from an atlas |
+| `ui.h` | frames, input, ids, interaction, focus, the light or dark appearance, animation, painting snapped to pixels |
+| `widgets.h`, `field.h`, `numfield.h`, `rich.h` | headless controls, text fields, number fields, rich text editing |
 | `window.h` | the app, the window and the main loop, the keyboard and input methods, cursors, menus |
 | `system.h` | the clipboard and what other apps copy, file panels, spell checking |
 
@@ -82,6 +90,24 @@ The modules stack in that order and each only uses the ones above it. An app tha
 - **State by id.** `civue_memory(ui, id, size, drop)` keeps a widget's state across frames, `civue_animate` eases a
   value and asks for frames while it moves.
 
+## Headless widgets
+
+- **State, not pixels.** A widget is a call per frame taking an id and a rect, and answering with a state: a
+  button's `held` and `activated`, a slider's value and where it sits along its track, a scroll area's tracks and
+  thumbs and how far its bars show, a group's choice. The app paints from that, before or after, with the painting
+  helpers of `ui.h`.
+- **Looks are callbacks.** What a widget can't answer in a struct, the app passes in: a menu measures and paints its
+  card and rows through a `civue_menu_look`, a number field paints itself idle through a `civue_num_look`, a text
+  field takes every color of a `civue_field_look`, rich text a `civue_rich_colors`. None has a default.
+- **The keys.** `ui->focus` is the widget the keys go to: enter and space activate a button, the arrows step a
+  slider or move a group's choice, a menu runs on the arrows and enter. A press doesn't move the focus, the app
+  does, and `ui->ring` with `civue_press_ring` is its keyboard navigation's ring. Text fields take the focus when
+  pressed, as editors do.
+- **Light or dark.** `ui->appearance` asks for the system's look, light or dark, and `ui->dark` says which the frame
+  has. The window's title bar follows it, and the desktop's setting arrives through the settings portal on Linux.
+- **Faces.** Text is set in the system's ui font and its monospace one, Core Text's on macOS and fontconfig's
+  `sans-serif` and `monospace` on Linux, until `civue_text_set_face` sets the app's own from a font file.
+
 ## How it draws
 
 - **One pass of instanced quads.** Rounded rects with borders, gaussian shadows, antialiased lines, glyph masks,
@@ -98,7 +124,9 @@ The modules stack in that order and each only uses the ones above it. An app tha
   carved out of 64 MiB blocks.
 - **Your own types.** An app with its own point, rect, color or array types of the same members defines
   `CIVUE_VEC2`, `CIVUE_RECT`, `CIVUE_COLOR`, `CIVUE_BYTES`, `CIVUE_U32S` or `CIVUE_STRS` as them before including
-  civue, and passes them straight through, which is how vektra keeps its own names.
+  civue, and passes them straight through, which is how vektra keeps its own names. `CIVUE_UI_FIELDS` adds fields of
+  its own at the end of `civue_ui`, its theme for one, and `civue_ui_new` and `civue_window_run` size the ui with
+  them.
 - **Your own shaders.** `civue_embed_shaders(target PREFIX name SOURCES ...)` in CMake compiles `.metal` files to
   metallibs on macOS and `.vert`, `.frag` and `.comp` ones to spir-v on Linux, and embeds them with `#embed`.
 
@@ -150,11 +178,11 @@ target_link_libraries(app PRIVATE civue::civue)
 ```
 
 The tests draw offscreen and read the pixels back: the renderer, text layout and drawing, interaction and ids, and
-the widgets with a click, a checkbox and typing. They run on Metal and on Mesa's lavapipe in Docker.
+what the widgets answer to clicks, drags, the wheel and the keys, a menu's path and a tooltip's place, with pixels
+where the test paints. They run on Metal and on Mesa's lavapipe in Docker.
 
 ## Limits
 
 - One window per process for now, and Wayland only on Linux.
-- The widgets look like figma's ui3, the theme struct changes their colors but not their shapes.
-- Inter and Roboto Mono are under the SIL Open Font License, see `assets/fonts/LICENSE.txt`. The tooltip arrows
-  come from Phosphor, MIT licensed.
+- Scroll bars are 10 points across and menus keep 8 points around their rows: geometry the pointer depends on, set
+  by civue while the app paints them.
