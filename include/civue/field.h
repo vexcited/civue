@@ -7,12 +7,10 @@
 extern "C" {
 #endif
 
-/* ==========================================================================================================
- */
-/* text fields: one line or several, edited with the keyboard, the pointer, the
- * clipboard and input methods.  */
-/* ==========================================================================================================
- */
+/* ========================================================================== */
+/* text fields: one line or several, edited with the keyboard, the pointer,   */
+/* the clipboard and input methods.                                           */
+/* ========================================================================== */
 
 // what a text field did this frame.
 typedef struct {
@@ -45,7 +43,8 @@ civue_field_response civue_text_field(civue_ui *ui, civue_id id, civue_rect r,
                                       civue_text_style style,
                                       civue_field_look look);
 // several lines wrapped to the field's width from its top: enter starts a
-// line and the arrows move between them.
+// line and the arrows move between them. what doesn't fit scrolls, keeping the
+// caret in view.
 civue_field_response civue_text_area(civue_ui *ui, civue_id id, civue_rect r,
                                      char **value, const char *placeholder,
                                      civue_text_style style,
@@ -56,6 +55,15 @@ char *civue_field_insert(civue_ui *ui, civue_id id, const char *text);
 // puts the caret of the editing field `id` after its text, false when it
 // isn't editing yet.
 bool civue_field_caret_to_end(civue_ui *ui, civue_id id);
+// the caret of the editing field `id`: its byte offset and where it was drawn
+// last frame. false when it isn't editing.
+bool civue_field_caret(civue_ui *ui, civue_id id, uint32_t *at,
+                       civue_rect *where);
+// replaces the bytes `from` to `to` of the editing field `id` with `text`, the
+// caret after it. its whole text after, malloc'd, nullptr when it isn't
+// editing.
+char *civue_field_replace(civue_ui *ui, civue_id id, uint32_t from, uint32_t to,
+                          const char *text);
 
 #ifdef __cplusplus
 }

@@ -2,6 +2,7 @@
 
 #include <civue/field.h>
 #include <civue/system.h>
+#include <civue/widgets.h>
 
 typedef struct {
   bool live;
@@ -13,6 +14,8 @@ typedef struct {
   f64 blink;
   // the x arrows up and down keep to, negative for none.
   f32 goal;
+  // where the caret was drawn last, its line's height.
+  civue_rect caret_rect;
 } Field;
 
 static void drop_field(void *p) {
@@ -150,6 +153,22 @@ static f32 line_height(const civue_text_block *b) {
   return b->nlines ? b->height / b->nlines : b->height;
 }
 
+// lays out a text area's text. a last newline makes no line of its own in a
+// layout, while the caret after it goes on one: a space stands for that line.
+static const civue_text_block *area_layout(civue_ui *ui, const char *s, usize n,
+                                           civue_text_style style, f32 wrap) {
+  if (wrap <= 0 || !n || s[n - 1] != '\n') {
+    return civue_layout_n(ui, s, n, style, wrap);
+  }
+  civue_bytes t = {};
+  buf_put(&t, s, n);
+  buf_put(&t, " ", 1);
+  const civue_text_block *b =
+    civue_layout_n(ui, (const char *)t.v, t.len, style, wrap);
+  vec_free(&t);
+  return b;
+}
+
 // ---- keys ----
 
 typedef struct {
@@ -186,7 +205,7 @@ static void key(Field *f, const civue_key_press *k, const civue_text_block *b,
         u32 end = b->nlines ? b->lines[cl].end : t->len;
         // a wrapped line ends before its trailing space.
         if (cl + 1 < b->nlines && end > b->lines[cl].start &&
-            t->v[end - 1] == ' ') {
+            (t->v[end - 1] == ' ' || t->v[end - 1] == '\n')) {
           end--;
         }
         move(f, end, shift);
@@ -297,6 +316,9 @@ static void key(Field *f, const civue_key_press *k, const civue_text_block *b,
   if (!vertical) {
     f->goal = -1;
   }
+  // the line a last newline makes reaches past the text.
+  f->caret = MIN(f->caret, t->len);
+  f->anchor = MIN(f->anchor, t->len);
 }
 
 // ---- the field ----
@@ -321,18 +343,26 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
               : v2(area.x0, r.y0 + (rect_h(r) - style.line_height) / 2);
   f32 wrap = multiline ? (f32)rect_w(area) : 0;
   const char *v = *value ? *value : "";
+  civue_id sid = civue_ids(id, "scroll");
 
   // the editor only exists while the field is focused.
   if (!focused) {
     civue_forget(ui, id);
     civue_field_box box = resp.hovered ? look.hovered : look.idle;
     civue_fill_stroke(ui, r, box.bg, box.border, box.border_width, box.radius);
-    civue_push_clip(ui, area);
     bool empty = !*v;
+    const char *shown = empty ? placeholder : v;
     const civue_text_block *b =
-      civue_layout(ui, empty ? placeholder : v, style, wrap);
+      area_layout(ui, shown, strlen(shown), style, wrap);
+    if (multiline) {
+      origin.y = civue_scroll_area(ui, sid, r, b->height + 8).y0 + 4;
+    }
+    civue_push_clip(ui, area);
     civue_draw_text(ui, b, origin, empty ? look.placeholder : box.text);
     civue_pop_clip(ui);
+    if (multiline) {
+      civue_scroll_end(ui);
+    }
     return out;
   }
   civue_claim_focus(ui);
@@ -352,13 +382,24 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
   }
   Edit e = {};
   const civue_text_block *b =
-    civue_layout_n(ui, (const char *)f->text.v, f->text.len, style, wrap);
+    area_layout(ui, (const char *)f->text.v, f->text.len, style, wrap);
   civue_input *in = &ui->input;
+  civue_field_box box = look.editing;
+  civue_fill_stroke(ui, r, box.bg, box.border, box.border_width, box.radius);
+  // where the pointer is in the text goes by the scroll the last frame showed.
+  if (multiline) {
+    origin.y -= civue_scroll_y(ui, sid);
+  }
+  // a press on the scroll bar leaves the caret where it is.
+  if (multiline && in->pressed[0] && !resp.pressed &&
+      rect_contains(r, in->mouse)) {
+    civue_keep_focus(ui);
+  }
   if (in->has_mouse && focused_before) {
     civue_vec2 p =
       v2(in->mouse.x - origin.x + f->scroll, in->mouse.y - origin.y);
     if (resp.pressed) {
-      u32 at = hit(b, p);
+      u32 at = MIN(hit(b, p), f->text.len);
       if (in->clicks >= 2) {
         f->anchor =
           word_left(&f->text, at < f->text.len && word_byte(f->text.v[at])
@@ -372,13 +413,17 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
       e.touched = true;
     }
     else if (resp.dragging) {
-      f->caret = hit(b, p);
+      f->caret = MIN(hit(b, p), f->text.len);
+      // past the edges it scrolls along.
+      if (multiline && !rect_contains(r, in->mouse)) {
+        civue_request_repaint(ui);
+      }
       e.touched = true;
     }
   }
   vec_each(&in->keys, k) {
     key(f, k, b, multiline, &e);
-    b = civue_layout_n(ui, (const char *)f->text.v, f->text.len, style, wrap);
+    b = area_layout(ui, (const char *)f->text.v, f->text.len, style, wrap);
   }
   if (in->text.len) {
     replace(f, (const char *)in->text.v, in->text.len);
@@ -398,19 +443,35 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
     out.changed = true;
   }
 
-  civue_field_box box = look.editing;
-  civue_fill_stroke(ui, r, box.bg, box.border, box.border_width, box.radius);
   // what an input method composes shows at the caret, underlined.
   civue_bytes shown = {};
   buf_put(&shown, f->text.v, f->caret);
   buf_put(&shown, in->preedit.v, in->preedit.len);
   buf_put(&shown, f->text.v + f->caret, f->text.len - f->caret);
-  b = civue_layout_n(ui, (const char *)shown.v, shown.len, style, wrap);
+  b = area_layout(ui, (const char *)shown.v, shown.len, style, wrap);
   u32 caret = f->caret + (u32)in->preedit.len, cl;
   f32 cx = caret_x(b, caret, &cl);
   // keeps the caret in view as it moves past the edges, and all of the
   // text once it fits.
   f32 w = (f32)rect_w(area);
+  // the scroll comes after the keys, so that what they did shows in view in
+  // the frame they were pressed, a drag past an edge easing along.
+  if (multiline) {
+    f32 top = b->nlines ? b->lines[cl].top : 0, lh = line_height(b),
+        view = (f32)rect_h(r);
+    f32 y = civue_scroll_y(ui, sid);
+    if (e.touched && resp.dragging) {
+      civue_scroll_to(ui, sid, top, top + lh + 8, view);
+      civue_request_repaint(ui);
+    }
+    else if (e.touched && top < y) {
+      civue_set_scroll_y(ui, sid, top);
+    }
+    else if (e.touched && top + lh + 8 > y + view) {
+      civue_set_scroll_y(ui, sid, top + lh + 8 - view);
+    }
+    origin.y = civue_scroll_area(ui, sid, r, b->height + 8).y0 + 4;
+  }
   if (multiline || b->width <= w - 2) {
     f->scroll = 0;
   }
@@ -454,6 +515,13 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
     f32 y = at.y + (b->nlines ? b->lines[cl].baseline : b->baseline) + 2;
     civue_hline(ui, at.x + p0, at.x + cx, y, box.text);
   }
+  {
+    f64 x = at.x + cx;
+    f64 y0 =
+      multiline ? at.y + (b->nlines ? b->lines[cl].top : 0) : origin.y + 1;
+    f->caret_rect =
+      rect(x, y0, x + 1, y0 + (multiline ? lh : style.line_height - 2));
+  }
   f64 since = ui->now - f->blink;
   bool lit = (u64)(since / 0.53) % 2 == 0;
   if (lo == hi && lit) {
@@ -465,6 +533,9 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
   }
   civue_pop_clip(ui);
   vec_free(&shown);
+  if (multiline) {
+    civue_scroll_end(ui);
+  }
   if (ui->focus == id) {
     civue_request_repaint_after(ui, 0.53 - fmod(since, 0.53));
   }
@@ -497,6 +568,40 @@ char *civue_field_insert(civue_ui *ui, civue_id id, const char *text) {
     return nullptr;
   }
   replace(f, text, strlen(text));
+  return xstrndup((const char *)f->text.v, f->text.len);
+}
+
+bool civue_field_caret(civue_ui *ui, civue_id id, uint32_t *at,
+                       civue_rect *where) {
+  if (ui->focus != id) {
+    return false;
+  }
+  Field *f = field_of(ui, id);
+  if (!f->live) {
+    return false;
+  }
+  if (at) {
+    *at = f->caret;
+  }
+  if (where) {
+    *where = f->caret_rect;
+  }
+  return true;
+}
+
+char *civue_field_replace(civue_ui *ui, civue_id id, uint32_t from, uint32_t to,
+                          const char *text) {
+  if (ui->focus != id) {
+    return nullptr;
+  }
+  Field *f = field_of(ui, id);
+  if (!f->live || from > to || to > f->text.len) {
+    return nullptr;
+  }
+  f->anchor = from;
+  f->caret = to;
+  replace(f, text, strlen(text));
+  f->blink = ui->now;
   return xstrndup((const char *)f->text.v, f->text.len);
 }
 
