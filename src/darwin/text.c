@@ -1,4 +1,4 @@
-#include "darwin.h"
+#include "../internal.h"
 
 #include <civue/text.h>
 
@@ -61,7 +61,7 @@ static CTFontDescriptorRef system_face(CTFontUIFontType type) {
   return d;
 }
 
-civue_text_system *civue_text_new(void) {
+civue_text_system *civue_text_new() {
   civue_text_system *t = own_new(sizeof *t);
   t->ui = system_face(kCTFontUIFontSystem);
   t->code = system_face(kCTFontUIFontUserFixedPitch);
@@ -209,6 +209,14 @@ static CTFontRef make_font(civue_text_system *t, civue_text_style s,
     CFRetain(base);
   }
   CTFontDescriptorRef d = CTFontDescriptorCreateCopyWithAttributes(base, attrs);
+  if (s.italic) {
+    CTFontDescriptorRef slanted = CTFontDescriptorCreateCopyWithSymbolicTraits(
+      d, kCTFontItalicTrait, kCTFontItalicTrait);
+    if (slanted) {
+      CFRelease(d);
+      d = slanted;
+    }
+  }
   CTFontRef font = CTFontCreateWithFontDescriptor(d, s.size * scale, nullptr);
   CFRelease(d);
   CFRelease(base);
@@ -221,8 +229,8 @@ static CTFontRef make_font(civue_text_system *t, civue_text_style s,
 
 static CTFontRef font_for(civue_text_system *t, civue_text_style s, f32 scale) {
   MadeFont want = {s.weight, s.size * scale,
-                   (u32)(s.mono | s.tnum << 1 | s.emoji << 2) | (u32)s.display
-                                                                  << 3};
+                   (u32)(s.mono | s.tnum << 1 | s.emoji << 2 | s.italic << 8) |
+                     (u32)s.display << 3};
   u32 bits[3] = {want.flags};
   memcpy(bits + 1, &want.weight, 8);
   u64 key = hash_bytes(bits, sizeof bits) | 1;
@@ -249,7 +257,8 @@ static u64 layout_key(const char *s, usize n, civue_text_style st,
   f32 v[] = {st.size,           st.weight, st.line_height,
              st.letter_spacing, max_width, scale};
   h ^= hash_bytes(v, sizeof v) * 0x9e3779b97f4a7c15ull;
-  h ^= hash_u64(st.mono | st.tnum << 1 | st.emoji << 2 | (u64)st.display << 3);
+  h ^= hash_u64(st.mono | st.tnum << 1 | st.emoji << 2 | (u64)st.italic << 8 |
+                (u64)st.display << 3);
   return h | 1;
 }
 

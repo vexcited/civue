@@ -94,7 +94,7 @@ static void source_set(Source *s, const u8 *data, usize len) {
   s->variable = hb_ot_var_has_data(s->hb);
 }
 
-civue_text_system *civue_text_new(void) {
+civue_text_system *civue_text_new() {
   civue_text_system *t = own_new(sizeof *t);
   if (FT_Init_FreeType(&t->ft)) {
     die("freetype: no library");
@@ -276,13 +276,14 @@ static bool covers(const Source *s, u32 cp) {
 }
 
 // the face text in the ui or the code face is set in at `weight`: the app's, or
-// the system's sans-serif or monospace nearest the weight.
-static u32 face_source(civue_text_system *t, bool code, f32 weight) {
+// the system's sans-serif or monospace nearest the weight, upright or italic.
+static u32 face_source(civue_text_system *t, bool code, f32 weight,
+                       bool italic) {
   u32 src = code ? SRC_CODE : SRC_UI;
   if (t->sources.v[src].hb) {
     return src;
   }
-  u64 key = ((u64)code << 32 | (u32)lroundf(weight)) + 1, v;
+  u64 key = ((u64)italic << 33 | (u64)code << 32 | (u32)lroundf(weight)) + 1, v;
   if (map_get(&t->system, key, &v)) {
     return (u32)v;
   }
@@ -290,6 +291,7 @@ static u32 face_source(civue_text_system *t, bool code, f32 weight) {
   FcPatternAddString(p, FC_FAMILY,
                      (const FcChar8 *)(code ? "monospace" : "sans-serif"));
   FcPatternAddDouble(p, FC_WEIGHT, FcWeightFromOpenTypeDouble(weight));
+  FcPatternAddInteger(p, FC_SLANT, italic ? FC_SLANT_ITALIC : FC_SLANT_ROMAN);
   FcConfigSubstitute(nullptr, p, FcMatchPattern);
   FcDefaultSubstitute(p);
   FcResult r;
@@ -413,7 +415,8 @@ static u64 layout_key(const char *s, usize n, civue_text_style st,
   f32 v[] = {st.size,           st.weight, st.line_height,
              st.letter_spacing, max_width, scale};
   h ^= hash_bytes(v, sizeof v) * 0x9e3779b97f4a7c15ull;
-  h ^= hash_u64(st.mono | st.tnum << 1 | st.emoji << 2 | (u64)st.display << 3);
+  h ^= hash_u64(st.mono | st.tnum << 1 | st.emoji << 2 | (u64)st.italic << 8 |
+                (u64)st.display << 3);
   return h | 1;
 }
 
@@ -473,7 +476,7 @@ static civue_text_block *build(civue_text_system *t, const char *s, usize n,
   vec_push(&at, (u32)n);
   u32 count = cps.len;
   f32 px = st.size * scale;
-  u32 base = face_source(t, st.mono, st.weight);
+  u32 base = face_source(t, st.mono, st.weight, st.italic);
   if (st.display && t->sources.v[SRC_DISPLAY + st.display].hb) {
     base = SRC_DISPLAY + st.display;
   }

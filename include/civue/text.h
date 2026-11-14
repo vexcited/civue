@@ -7,16 +7,12 @@
 extern "C" {
 #endif
 
-/* ==========================================================================================================
- */
-/* text. laid out once per text, style and scale with core text on macos and
- * harfbuzz on linux, its glyphs    */
-/* rasterized into the renderer's atlases as they are first drawn. the ui and
- * the code faces are the          */
-/* system's ui font and its monospace one until the app sets its own with
- * civue_text_set_face.                */
-/* ==========================================================================================================
- */
+/* ========================================================================== */
+/* text. laid out once per text, style and scale with core text on macos and  */
+/* harfbuzz on linux, its glyphs rasterized into the renderer's atlases as    */
+/* they are first drawn. the ui and the code faces are the system's ui font   */
+/* and its monospace one until the app sets its own with civue_text_set_face. */
+/* ========================================================================== */
 
 // faces an app registers while running, chosen by civue_text_style.display from
 // 1 up to this.
@@ -34,6 +30,8 @@ typedef struct {
   float size, weight, line_height, letter_spacing;
   // in the code face rather than the ui one.
   bool mono;
+  // its italic, the system's when the face is the system's.
+  bool italic;
   // tabular digits, css font-variant tabular-nums.
   bool tnum;
   // emoji only, its face first.
@@ -59,6 +57,11 @@ static inline civue_text_style civue_style_weight(civue_text_style s,
 
 static inline civue_text_style civue_style_mono(civue_text_style s) {
   s.mono = true;
+  return s;
+}
+
+static inline civue_text_style civue_style_italic(civue_text_style s) {
+  s.italic = true;
   return s;
 }
 
@@ -113,7 +116,7 @@ typedef struct {
 
 typedef struct civue_text_system civue_text_system;
 
-civue_text_system *civue_text_new(void);
+civue_text_system *civue_text_new();
 void civue_text_free(civue_text_system *t);
 // lays text out, wrapped at max_width points when positive, at `scale` physical
 // pixels per point. the block lives at least until the end of the next frame.
