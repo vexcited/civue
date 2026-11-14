@@ -104,6 +104,18 @@ void civue_dl_rect(civue_draw_list *d, civue_rect r, const f32 radii[4],
   push(d, q, 0);
 }
 
+void civue_dl_rect_sides(civue_draw_list *d, civue_rect r, const f32 radii[4],
+                         civue_color fill, civue_color border,
+                         const f32 widths[4]) {
+  civue_quad q = {.params = {-1, CIVUE_QUAD_RECT}};
+  set_rect(&q, r);
+  premul(fill, q.color);
+  premul(border, q.border);
+  memcpy(q.radii, radii, sizeof q.radii);
+  memcpy(q.uv, widths, sizeof q.uv);
+  push(d, q, 0);
+}
+
 void civue_dl_shadow(civue_draw_list *d, civue_rect r, f32 radius, f32 sigma,
                      civue_color color) {
   civue_quad q = {.radii = {radius, radius, radius, radius},

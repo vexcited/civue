@@ -7,13 +7,11 @@
 extern "C" {
 #endif
 
-/* ==========================================================================================================
- */
-/* draw lists. what a frame draws, platform neutral: instanced quads in physical
- * pixels, in order, batched by */
-/* the image they sample. <civue/gfx.h> draws them on the gpu. */
-/* ==========================================================================================================
- */
+/* ========================================================================== */
+/* draw lists. what a frame draws, platform neutral: instanced quads in       */
+/* physical pixels, in order, batched by the image they sample. <civue/gfx.h> */
+/* draws them on the gpu.                                                     */
+/* ========================================================================== */
 
 // side of the glyph and icon atlases.
 constexpr uint32_t CIVUE_ATLAS_SIZE = 2048;
@@ -98,6 +96,11 @@ static inline void civue_dl_fill(civue_draw_list *d, civue_rect r, float radius,
                 CIVUE_CLEAR, 0);
 }
 
+// a rounded rect with a border of its own width on each side, from the top
+// clockwise.
+void civue_dl_rect_sides(civue_draw_list *d, civue_rect r, const float radii[4],
+                         civue_color fill, civue_color border,
+                         const float widths[4]);
 // a gaussian blurred rounded rect.
 void civue_dl_shadow(civue_draw_list *d, civue_rect r, float radius,
                      float sigma, civue_color color);
@@ -122,12 +125,10 @@ void civue_dl_image_grid(civue_draw_list *d, civue_texture t, civue_rect r,
                          const float uv[4], bool nearest,
                          const civue_pixel_grid *grid);
 
-/* ==========================================================================================================
- */
-/* atlases. glyph and icon bitmaps packed in shelves, uploaded by the renderer
- * before it draws.               */
-/* ==========================================================================================================
- */
+/* ========================================================================== */
+/* atlases. glyph and icon bitmaps packed in shelves, uploaded by the         */
+/* renderer before it draws.                                                  */
+/* ========================================================================== */
 
 typedef struct {
   uint32_t x, y, w, h;
