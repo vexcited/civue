@@ -204,11 +204,11 @@ static struct {
        .buffer_scale = 1};
 
 // the app id the desktop file and the compositor know the window by.
-static const char *app_id(void) {
+static const char *app_id() {
   return W.options.app_id ? W.options.app_id : "civue";
 }
 
-bool civue__main_thread(void) {
+bool civue__main_thread() {
   return gettid() == getpid();
 }
 
@@ -216,11 +216,11 @@ bool civue__main_thread(void) {
 static int wake_fd = -1;
 static _Atomic bool woken;
 
-static void want(void) {
+static void want() {
   W.wanted = true;
 }
 
-void civue_window_wake(void) {
+void civue_window_wake() {
   woken = true;
   if (wake_fd >= 0) {
     eventfd_write(wake_fd, 1);
@@ -255,7 +255,7 @@ void civue_on_main(void (*fn)(void *arg), void *arg) {
 }
 
 // runs what other threads asked of the main thread.
-static void run_calls(void) {
+static void run_calls() {
   for (;;) {
     pthread_mutex_lock(&W.lock);
     Call *c = W.calls.len ? W.calls.v[0] : nullptr;
@@ -275,18 +275,18 @@ static void run_calls(void) {
   }
 }
 
-bool civue_window_maximized(void) {
+bool civue_window_maximized() {
   return W.maximized;
 }
 
-const char *civue_window_handle(void) {
+const char *civue_window_handle() {
   return W.handle ? W.handle : "";
 }
 
 // ---- scale ----
 
 // physical pixels per point.
-static f32 scale_factor(void) {
+static f32 scale_factor() {
   if (W.scale120) {
     return W.scale120 / 120.0f;
   }
@@ -305,7 +305,7 @@ static void pixel_size(u32 *pw, u32 *ph) {
   }
 }
 
-static void scale_changed(void) {
+static void scale_changed() {
   W.stale = true;
   civue__cursors_set_scale(scale_factor());
   W.cursor_set = false;
@@ -313,7 +313,7 @@ static void scale_changed(void) {
 }
 
 // the largest scale of the outputs the window shows on.
-static void outputs_scale(void) {
+static void outputs_scale() {
   if (W.preferred_scale || W.scale120) {
     return;
   }
@@ -335,7 +335,7 @@ static void outputs_scale(void) {
 
 // ---- the swapchain ----
 
-static void drop_swapchain(void) {
+static void drop_swapchain() {
   const civue_vk_device *v = civue_vk();
   // the frames that drew into the images are done, the canvas's work goes
   // on.
@@ -355,7 +355,7 @@ static void drop_swapchain(void) {
 }
 
 // makes the swapchain at the window's pixel size.
-static void make_swapchain(void) {
+static void make_swapchain() {
   const civue_vk_device *v = civue_vk();
   VkSurfaceCapabilitiesKHR caps;
   vkGetPhysicalDeviceSurfaceCapabilitiesKHR(v->physical, W.surface, &caps);
@@ -471,11 +471,11 @@ static void make_swapchain(void) {
 
 static GDBusConnection *bus;
 
-static void connect_bus(void) {
+static void connect_bus() {
   bus = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, nullptr);
 }
 
-static GDBusConnection *session_bus(void) {
+static GDBusConnection *session_bus() {
   static pthread_once_t once = PTHREAD_ONCE_INIT;
   pthread_once(&once, connect_bus);
   return bus;
@@ -542,7 +542,7 @@ static bool take_dark(GVariant *v) {
 
 // gtk's decoration layout from its settings files, malloc'd, nullptr when
 // they say none.
-static char *gtk_layout(void) {
+static char *gtk_layout() {
   const char *files[] = {".config/gtk-4.0/settings.ini",
                          ".config/gtk-3.0/settings.ini"};
   for (u32 i = 0; i < countof(files); i++) {
@@ -629,7 +629,7 @@ static void set_layout(const char *layout) {
   }
 }
 
-static char *read_layout(void) {
+static char *read_layout() {
   char *layout = take_string(
     portal_setting("org.gnome.desktop.wm.preferences", "button-layout"));
   return layout ? layout : gtk_layout();
@@ -679,7 +679,7 @@ static void *watch_settings(void *arg) {
 }
 
 // how the desktop's windows look: dark or light, their buttons, how round.
-static void read_look(void) {
+static void read_look() {
   W.dark =
     take_dark(portal_setting("org.freedesktop.appearance", "color-scheme"));
   char *layout = read_layout();
@@ -767,7 +767,7 @@ static bool on_title_bar(civue_vec2 at) {
           civue_region_at(W.ui, at) == W.options.titlebar_id);
 }
 
-static void toggle_maximized(void) {
+static void toggle_maximized() {
   if (W.maximized) {
     xdg_toplevel_unset_maximized(W.toplevel);
   }
@@ -853,7 +853,7 @@ static void civue_button(u32 code, bool down) {
   want();
 }
 
-static void released_all(void) {
+static void released_all() {
   for (u32 i = 0; i < 3; i++) {
     if (W.input.down[i]) {
       W.input.down[i] = false;
@@ -1439,7 +1439,7 @@ static const struct wl_keyboard_listener keyboard_listener = {
   .repeat_info = keyboard_repeat};
 
 // repeats the key held, as often as the compositor says.
-static void repeat_keys(void) {
+static void repeat_keys() {
   if (!W.repeat_key || W.repeat_rate <= 0) {
     return;
   }
@@ -1516,7 +1516,7 @@ static const struct zwp_text_input_v3_listener text_listener = {
   .done = text_done};
 
 // the input method's candidates open under the pointer.
-static void place_candidates(void) {
+static void place_candidates() {
   if (!W.text_on) {
     return;
   }
@@ -1825,7 +1825,7 @@ static void raise_on_main(void *arg) {
   wl_display_flush(WL.display);
 }
 
-void civue_window_raise(void) {
+void civue_window_raise() {
   civue_on_main(raise_on_main, nullptr);
 }
 
@@ -1919,13 +1919,13 @@ static const struct wl_callback_listener frame_listener = {.done = frame_done};
 
 // whether a frame can be drawn now: the window is shown, and the compositor
 // took the last one or wants a new size.
-static bool drawable(void) {
+static bool drawable() {
   return W.configured && !W.suspended && (!W.frame_cb || W.reconfigured);
 }
 
 // the cursor the pointer shows: a resize at the window's edges, the app's
 // elsewhere.
-static void update_cursor(void) {
+static void update_cursor() {
   u32 edge = W.input.has_mouse ? edge_at(W.input.mouse) : 0;
   if (edge) {
     if (W.cursor_edge != edge) {
@@ -1946,7 +1946,7 @@ static void update_cursor(void) {
   civue__cursors_set(ui->cursor);
 }
 
-static void frame(void) {
+static void frame() {
   W.wanted = false;
   const civue_vk_device *v = civue_vk();
   // the frame that last used this slot's semaphore is done.
@@ -1990,9 +1990,13 @@ static void frame(void) {
   }
   ui->system_dark = W.dark;
   ui->window_focused = W.activated;
-  civue_begin_frame(ui, v2(pw / scale, ph / scale), scale, &W.input);
-  W.app_cb.frame(W.app_cb.ctx, ui);
-  civue_end_frame(ui);
+  for (u32 pass = 0; pass < 4; pass++) {
+    civue_begin_frame(ui, v2(pw / scale, ph / scale), scale, &W.input);
+    W.app_cb.frame(W.app_cb.ctx, ui);
+    if (civue_end_frame(ui)) {
+      break;
+    }
+  }
   // the mask uploads with a submission of its own, before the frame's.
   bool round = W.custom_frame && W.translucent && !W.maximized &&
                !W.fullscreen && !W.tiled;
@@ -2129,7 +2133,7 @@ void civue_wait_while(bool (*waiting)(void *arg), void *arg) {
 
 // the timeout of the next wait: now for a frame, else the first of the
 // timer and the key repeat, -1 for none.
-static i32 next_wait(void) {
+static i32 next_wait() {
   f64 next = W.wanted && drawable() ? now_s() : W.timer_at;
   if (W.repeat_key && (!next || W.repeat_at < next)) {
     next = W.repeat_at;

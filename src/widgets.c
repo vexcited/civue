@@ -157,6 +157,7 @@ typedef struct {
   civue_rect r, vt, ht;
   f32 max, max_x, vl, hl, offset, x;
   bool hovered, recently, dragging, vertical, on_bars;
+  const civue_scrollbar_look *look;
 } ScrollFrame;
 
 typedef struct {
@@ -179,6 +180,10 @@ static Scroll *scroll_state(civue_ui *ui, civue_id id) {
 
 f32 civue_scroll_x(civue_ui *ui, civue_id id) {
   return scroll_state(ui, id)->x;
+}
+
+f32 civue_scroll_y(civue_ui *ui, civue_id id) {
+  return scroll_state(ui, id)->offset;
 }
 
 void civue_set_scroll_y(civue_ui *ui, civue_id id, f32 y) {
@@ -213,12 +218,23 @@ civue_rect civue_scroll_area(civue_ui *ui, civue_id id, civue_rect r,
   return civue_scroll_area_xy(ui, id, r, rect_w(r), content_height);
 }
 
-static f32 thumb_len(f32 track, f32 view, f32 content) {
-  return fminf(fmaxf((track - 4) * view / fmaxf(content, 1), 24), track - 4);
+static f32 thumb_len(const civue_scrollbar_look *look, f32 track, f32 view,
+                     f32 content) {
+  f32 room = track - 2 * look->inset;
+  return fminf(fmaxf(room * view / fmaxf(content, 1), look->min_thumb), room);
 }
 
 civue_rect civue_scroll_area_xy(civue_ui *ui, civue_id id, civue_rect r, f32 cw,
                                 f32 ch) {
+  return civue_scroll_area_look(ui, id, r, cw, ch, ui->scrollbars);
+}
+
+civue_rect civue_scroll_area_look(civue_ui *ui, civue_id id, civue_rect r,
+                                  f32 cw, f32 ch,
+                                  const civue_scrollbar_look *look) {
+  if (!look) {
+    look = ui->scrollbars;
+  }
   f32 max = fmax(ch - rect_h(r), 0), mx = fmax(cw - rect_w(r), 0);
   civue_vec2 m = ui->input.mouse;
   bool pointer = ui->input.has_mouse;
@@ -230,10 +246,11 @@ civue_rect civue_scroll_area_xy(civue_ui *ui, civue_id id, civue_rect r, f32 cw,
     wx = wy;
     wy = 0;
   }
-  civue_rect vt = rect(r.x1 - 10, r.y0, r.x1, r.y1 - 8);
-  civue_rect ht = rect(r.x0, r.y1 - 10, r.x1 - 8, r.y1);
-  f32 vl = thumb_len(rect_h(vt), rect_h(r), ch);
-  f32 hl = thumb_len(rect_w(ht), rect_w(r), cw);
+  f32 bar = look ? look->size : 0, in = look ? look->inset : 0;
+  civue_rect vt = rect(r.x1 - bar, r.y0, r.x1, r.y1 - (mx > 0 ? bar : 0));
+  civue_rect ht = rect(r.x0, r.y1 - bar, r.x1 - (max > 0 ? bar : 0), r.y1);
+  f32 vl = look ? thumb_len(look, rect_h(vt), rect_h(r), ch) : 0;
+  f32 hl = look ? thumb_len(look, rect_w(ht), rect_w(r), cw) : 0;
   Scroll *s = scroll_state(ui, id);
   bool scrolled = false;
   if (hovered && wy != 0 && max > 0) {
@@ -247,9 +264,9 @@ civue_rect civue_scroll_area_xy(civue_ui *ui, civue_id id, civue_rect r, f32 cw,
     s->x = clamp(s->x - wx, 0, mx);
     scrolled = true;
   }
-  if (pointer && ui->input.pressed[0]) {
+  if (look && pointer && ui->input.pressed[0]) {
     if (max > 0 && rect_contains(vt, m)) {
-      f32 y = vt.y0 + 2 + (rect_h(vt) - 4 - vl) * s->offset / max;
+      f32 y = vt.y0 + in + (rect_h(vt) - 2 * in - vl) * s->offset / max;
       if (m.y >= y && m.y < y + vl) {
         s->dragging = true;
         s->vertical = true;
@@ -263,7 +280,7 @@ civue_rect civue_scroll_area_xy(civue_ui *ui, civue_id id, civue_rect r, f32 cw,
       scrolled = true;
     }
     else if (mx > 0 && rect_contains(ht, m)) {
-      f32 x = ht.x0 + 2 + (rect_w(ht) - 4 - hl) * s->x / mx;
+      f32 x = ht.x0 + in + (rect_w(ht) - 2 * in - hl) * s->x / mx;
       if (m.x >= x && m.x < x + hl) {
         s->dragging = true;
         s->vertical = false;
@@ -279,11 +296,11 @@ civue_rect civue_scroll_area_xy(civue_ui *ui, civue_id id, civue_rect r, f32 cw,
   if (s->dragging && pointer) {
     if (ui->input.down[0]) {
       if (s->vertical) {
-        f32 k = max / fmax(rect_h(vt) - 4 - vl, 1);
+        f32 k = max / fmax(rect_h(vt) - 2 * in - vl, 1);
         s->offset = s->target = clamp(s->start + (m.y - s->from) * k, 0, max);
       }
       else {
-        f32 k = mx / fmax(rect_w(ht) - 4 - hl, 1);
+        f32 k = mx / fmax(rect_w(ht) - 2 * in - hl, 1);
         s->x = clamp(s->start + (m.x - s->from) * k, 0, mx);
       }
       scrolled = true;
@@ -321,11 +338,14 @@ civue_rect civue_scroll_area_xy(civue_ui *ui, civue_id id, civue_rect r, f32 cw,
                    .offset = s->offset,
                    .x = s->x,
                    .hovered = hovered,
-                   .recently = s->has_scroll && ui->now - s->last_scroll < 1,
+                   .recently = look && s->has_scroll &&
+                               ui->now - s->last_scroll < look->linger,
                    .dragging = s->dragging,
                    .vertical = s->vertical,
-                   .on_bars = pointer && ((max > 0 && rect_contains(vt, m)) ||
-                                          (mx > 0 && rect_contains(ht, m)))};
+                   .on_bars = look && pointer &&
+                              ((max > 0 && rect_contains(vt, m)) ||
+                               (mx > 0 && rect_contains(ht, m))),
+                   .look = look};
   vec_push(&scroll_stack(ui)->frames, f);
   civue_rect content = rect_xywh(r.x0 - s->x, r.y0 - s->offset,
                                  fmax(cw, rect_w(r)), fmax(ch, rect_h(r)));
@@ -347,32 +367,33 @@ civue_scroll_state civue_scroll_end(civue_ui *ui) {
                      CIVUE_SENSE_DRAG);
     }
   }
-  if (f.max <= 0 && f.max_x <= 0) {
+  if (!f.look || (f.max <= 0 && f.max_x <= 0)) {
     return s;
   }
-  s.show = civue_animate(ui, civue_ids(f.id, "bar"),
-                         f.hovered || f.recently || f.dragging ? 1 : 0, .2);
+  bool lit = f.hovered || f.recently || f.dragging;
+  s.show = civue_animate(ui, civue_ids(f.id, "bar"), lit ? 1 : 0, f.look->fade);
   if (f.recently) {
-    civue_request_repaint_after(ui, 1.05);
+    civue_request_repaint_after(ui, f.look->linger + .05);
   }
+  f32 in = f.look->inset;
   bool pointer = ui->input.has_mouse;
   civue_vec2 m = ui->input.mouse;
   if (f.max > 0) {
     civue_rect t = f.vt;
-    f32 y = t.y0 + 2 + (rect_h(t) - 4 - f.vl) * f.offset / f.max;
+    f32 y = t.y0 + in + (rect_h(t) - 2 * in - f.vl) * f.offset / f.max;
     s.vertical = (civue_scrollbar){
-      true, t, rect(t.x0 + 2, y, t.x1 - 2, y + f.vl),
+      true, t, rect(t.x0 + in, y, t.x1 - in, y + f.vl),
       (pointer && rect_contains(t, m)) || (f.dragging && f.vertical)};
   }
   if (f.max_x > 0) {
     civue_rect t = f.ht;
-    f32 x = t.x0 + 2 + (rect_w(t) - 4 - f.hl) * f.x / f.max_x;
+    f32 x = t.x0 + in + (rect_w(t) - 2 * in - f.hl) * f.x / f.max_x;
     s.horizontal = (civue_scrollbar){
-      true, t, rect(x, t.y0 + 2, x + f.hl, t.y1 - 2),
+      true, t, rect(x, t.y0 + in, x + f.hl, t.y1 - in),
       (pointer && rect_contains(t, m)) || (f.dragging && !f.vertical)};
   }
-  if (ui->scrollbars) {
-    ui->scrollbars(ui, &s);
+  if (f.look->paint) {
+    f.look->paint(ui, f.look->ctx, &s);
   }
   return s;
 }
@@ -396,7 +417,7 @@ constexpr f32 MENU_PAD = 8;
 constexpr f32 MENU_OVERLAP = 4;
 constexpr f32 MENU_CUT = 16;
 
-civue_menu_options civue_menu_options_default(void) {
+civue_menu_options civue_menu_options_default() {
   return (civue_menu_options){.gap = 4, .focus_row = -1};
 }
 
@@ -405,7 +426,7 @@ static bool menu_regular(const civue_menu_item *item) {
 }
 
 static const civue_menu_look *look_of(const civue_menu_options *o) {
-  static const civue_menu_look none = {};
+  static constexpr civue_menu_look none = {};
   return o->look ? o->look : &none;
 }
 

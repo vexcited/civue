@@ -9,14 +9,11 @@
 extern "C" {
 #endif
 
-/* ==========================================================================================================
- */
-/* the immediate mode ui: input, interaction, animation and painting helpers. a
- * frame only runs when input,   */
-/* an animation or the app asks. coordinates are logical points unless said
- * otherwise.                        */
-/* ==========================================================================================================
- */
+/* ========================================================================== */
+/* the immediate mode ui: input, interaction, animation and painting helpers. */
+/* a frame only runs when input, an animation or the app asks. coordinates    */
+/* are logical points unless said otherwise.                                  */
+/* ========================================================================== */
 
 // whether the app looks light or dark: as the system does, or one of them
 // whatever the system does.
@@ -200,6 +197,8 @@ typedef enum : uint8_t {
 
 typedef struct civue_ui civue_ui;
 typedef struct civue_scroll_state civue_scroll_state;
+typedef struct civue_tree civue_tree;
+typedef struct civue_scrollbar_look civue_scrollbar_look;
 
 struct civue_ui {
   civue_gfx *gfx;
@@ -234,6 +233,8 @@ struct civue_ui {
   CIVUE_VEC(civue_anim) anims;
   // id to a block made by civue_memory.
   civue_map memory;
+  // the nodes of <civue/layout.h>, made when the first opens.
+  civue_tree *tree;
   bool repaint;
   // when a frame is wanted, 0 for none, in civue_now seconds.
   double repaint_at;
@@ -256,13 +257,19 @@ struct civue_ui {
   bool window_controls, window_maximized;
   civue_title_button titlebar_start[4], titlebar_end[4];
   bool minimize_window, close_window;
-  // paints the bars of a scroll area as civue_scroll_end ends it, nothing when
-  // null.
-  void (*scrollbars)(civue_ui *ui, const civue_scroll_state *s);
+  // the bars of the scroll areas without a look of their own, none when null.
+  const civue_scrollbar_look *scrollbars;
 #ifdef CIVUE_UI_FIELDS
   CIVUE_UI_FIELDS
 #endif
 };
+
+// the ui whose frame this thread builds, from civue_begin_frame on.
+extern thread_local civue_ui *civue__ui;
+
+static inline civue_ui *civue_ui_current() {
+  return civue__ui;
+}
 
 // a ui of `size` bytes, zeroed: sizeof(civue_ui) where the app includes civue.
 // an app keeps fields of its own at the end of civue_ui by defining
@@ -276,7 +283,9 @@ void civue_ui_free(civue_ui *ui);
 // what carries over: buttons held, the pointer and the modifiers.
 void civue_begin_frame(civue_ui *ui, civue_vec2 size, float scale,
                        civue_input *input);
-void civue_end_frame(civue_ui *ui);
+// solves the frame's nodes, false when they moved from where they were painted
+// and the frame should run again, without the input, before it shows.
+bool civue_end_frame(civue_ui *ui);
 // both draw lists of the frame as one.
 const civue_draw_list *civue_frame_list(civue_ui *ui);
 void civue_input_free(civue_input *in);
@@ -287,11 +296,9 @@ civue_id civue_region_at(const civue_ui *ui, civue_vec2 p);
 void civue_request_repaint(civue_ui *ui);
 void civue_request_repaint_after(civue_ui *ui, double seconds);
 
-/* ==========================================================================================================
- */
-/* layers. */
-/* ==========================================================================================================
- */
+/* ========================================================================== */
+/* layers.                                                                    */
+/* ========================================================================== */
 
 // what draws until the matching end goes above everything, for menus.
 bool civue_begin_overlay(civue_ui *ui);
@@ -302,11 +309,9 @@ void civue_push_clip(civue_ui *ui, civue_rect r);
 void civue_pop_clip(civue_ui *ui);
 civue_rect civue_clip_rect(civue_ui *ui);
 
-/* ==========================================================================================================
- */
-/* interaction. */
-/* ==========================================================================================================
- */
+/* ========================================================================== */
+/* interaction.                                                               */
+/* ========================================================================== */
 
 // registers `rect` for the pointer and reports what it did.
 civue_response civue_interact(civue_ui *ui, civue_id id, civue_rect rect,
@@ -327,11 +332,9 @@ const char *civue_shortcut_label(const char *mac);
 // a shortcut with the platform command modifier.
 bool civue_shortcut(civue_ui *ui, uint32_t key, bool shift);
 
-/* ==========================================================================================================
- */
-/* state. */
-/* ==========================================================================================================
- */
+/* ========================================================================== */
+/* state.                                                                     */
+/* ========================================================================== */
 
 // eases a value toward `target` over `seconds`, asking frames while it moves.
 float civue_animate(civue_ui *ui, civue_id id, float target, float seconds);
@@ -347,11 +350,9 @@ void civue_forget(civue_ui *ui, civue_id id);
 float civue_cubic_bezier(float x1, float y1, float x2, float y2, float t);
 float civue_ease(float t);
 
-/* ==========================================================================================================
- */
-/* painting, snapped to pixels. */
-/* ==========================================================================================================
- */
+/* ========================================================================== */
+/* painting, snapped to pixels.                                               */
+/* ========================================================================== */
 
 void civue_fill(civue_ui *ui, civue_rect r, civue_color c, float radius);
 void civue_fill_corners(civue_ui *ui, civue_rect r, civue_color c,
@@ -359,6 +360,10 @@ void civue_fill_corners(civue_ui *ui, civue_rect r, civue_color c,
 // radii top left first and clockwise.
 void civue_stroke_corners(civue_ui *ui, civue_rect r, civue_color c,
                           float width, const float radii[4]);
+// an inside border of its own width on each side, from the top clockwise,
+// each at least a device pixel wide unless 0.
+void civue_stroke_sides(civue_ui *ui, civue_rect r, civue_color c,
+                        const float widths[4], const float radii[4]);
 // an inside border, at least a device pixel wide.
 void civue_stroke(civue_ui *ui, civue_rect r, civue_color c, float width,
                   float radius);
@@ -393,11 +398,9 @@ void civue_icon_centered(civue_ui *ui, civue_icon icon, civue_rect r,
 void civue_icon_mirrored(civue_ui *ui, civue_icon icon, civue_rect r,
                          float size, civue_color c);
 
-/* ==========================================================================================================
- */
-/* text. */
-/* ==========================================================================================================
- */
+/* ========================================================================== */
+/* text.                                                                      */
+/* ========================================================================== */
 
 const civue_text_block *civue_layout(civue_ui *ui, const char *s,
                                      civue_text_style style, float max_width);
@@ -419,27 +422,48 @@ static inline void civue_set_cursor(civue_ui *ui, civue_cursor_kind k) {
   ui->cursor = (civue_cursor){k, 0};
 }
 
-/* ==========================================================================================================
- */
-/* blocks. each runs its body once between a begin and an end, so a `break` or a
- * `return` inside skips the    */
-/* end. */
-/* ==========================================================================================================
- */
+/* ========================================================================== */
+/* blocks. each runs its body once between a begin and an end, the end        */
+/* running however the body is left: at its close, a `break`, a `continue` or */
+/* a `return`.                                                                */
+/* ========================================================================== */
 
 #define CIVUE__CAT_(a, b) a##b
 #define CIVUE__CAT(a, b) CIVUE__CAT_(a, b)
-#define CIVUE__ONCE CIVUE__CAT(civue__once_, __LINE__)
-#define CIVUE__WAS CIVUE__CAT(civue__was_, __LINE__)
+#define CIVUE__SCOPE CIVUE__CAT(civue__scope_, __LINE__)
+
+typedef struct {
+  civue_ui *ui;
+  bool open, was;
+} civue_scope;
+
+static inline civue_scope civue__clip_begin(civue_ui *ui, civue_rect r) {
+  civue_push_clip(ui, r);
+  return (civue_scope){.ui = ui, .open = true};
+}
+
+static inline void civue__clip_end(civue_scope *s) {
+  civue_pop_clip(s->ui);
+}
+
+static inline civue_scope civue__overlay_begin(civue_ui *ui) {
+  return (civue_scope){ui, true, civue_begin_overlay(ui)};
+}
+
+static inline void civue__overlay_end(civue_scope *s) {
+  civue_end_overlay(s->ui, s->was);
+}
 
 // draws its body clipped to `r`.
-#define CIVUE_CLIPPED(ui, r)                                           \
-  for (bool CIVUE__ONCE = (civue_push_clip(ui, r), true); CIVUE__ONCE; \
-       CIVUE__ONCE = (civue_pop_clip(ui), false))
+#define CIVUE_CLIPPED(ui, r)                                         \
+  for (civue_scope CIVUE__SCOPE                                      \
+       [[gnu::cleanup(civue__clip_end)]] = civue__clip_begin(ui, r); \
+       CIVUE__SCOPE.open; CIVUE__SCOPE.open = false)
 // draws its body above everything else, for menus and popovers.
-#define CIVUE_OVERLAY(ui)                                             \
-  for (bool CIVUE__WAS = civue_begin_overlay(ui), CIVUE__ONCE = true; \
-       CIVUE__ONCE; CIVUE__ONCE = (civue_end_overlay(ui, CIVUE__WAS), false))
+#define CIVUE_OVERLAY(ui)                                               \
+  for (civue_scope CIVUE__SCOPE                                         \
+       [[gnu::cleanup(civue__overlay_end)]] = civue__overlay_begin(ui); \
+       CIVUE__SCOPE.open; CIVUE__SCOPE.open = false)
 
 #ifdef __cplusplus
 }

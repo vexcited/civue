@@ -7,6 +7,8 @@ typedef struct {
   alignas(16) u8 data[];
 } Memory;
 
+thread_local civue_ui *civue__ui;
+
 civue_ui *civue_ui_new_sized(civue_gfx *gfx, f32 scale, usize size) {
   civue_ui *ui = own_new(MAX(size, sizeof *ui));
   ui->gfx = gfx;
@@ -36,6 +38,9 @@ void civue_ui_free(civue_ui *ui) {
   if (!ui) {
     return;
   }
+  if (civue__ui == ui) {
+    civue__ui = nullptr;
+  }
   CILO_MAP_EACH(e, &ui->memory) {
     Memory *m = (Memory *)e->val;
     if (m->drop) {
@@ -44,6 +49,7 @@ void civue_ui_free(civue_ui *ui) {
     own_free(m);
   }
   map_free(&ui->memory);
+  civue__tree_free(ui->tree);
   civue_text_free(ui->text);
   civue_icons_free(ui->icons);
   civue_dl_free(&ui->base);
@@ -80,6 +86,7 @@ civue_id civue_region_at(const civue_ui *ui, civue_vec2 p) {
 
 void civue_begin_frame(civue_ui *ui, civue_vec2 size, f32 scale,
                        civue_input *input) {
+  civue__ui = ui;
   ui->size = size;
   ui->scale = scale;
   // the input moves in, what carries over goes back.
@@ -160,7 +167,8 @@ const civue_draw_list *civue_frame_list(civue_ui *ui) {
   return &ui->combined;
 }
 
-void civue_end_frame(civue_ui *ui) {
+bool civue_end_frame(civue_ui *ui) {
+  bool settled = civue__tree_end(ui);
   // a press elsewhere, or the focused widget gone, ends the focus.
   if (!ui->focus_alive ||
       (ui->input.pressed[0] && ui->active != ui->focus && !ui->focus_kept)) {
@@ -190,6 +198,7 @@ void civue_end_frame(civue_ui *ui) {
     }
   }
   ui->anims.len = k;
+  return settled;
 }
 
 void civue_request_repaint(civue_ui *ui) {
@@ -496,6 +505,17 @@ void civue_stroke_corners(civue_ui *ui, civue_rect r, civue_color c, f32 width,
   civue_dl_rect(civue_list(ui), px(ui, r), rr, CIVUE_CLEAR, c, w);
 }
 
+void civue_stroke_sides(civue_ui *ui, civue_rect r, civue_color c,
+                        const f32 widths[4], const f32 radii[4]) {
+  f32 rr[4], ww[4];
+  for (u32 i = 0; i < 4; i++) {
+    rr[i] = radii[i] * ui->scale;
+    ww[i] = widths[i] > 0 ? fmaxf(roundf(widths[i] * ui->scale), 1) : 0;
+  }
+
+  civue_dl_rect_sides(civue_list(ui), px(ui, r), rr, CIVUE_CLEAR, c, ww);
+}
+
 void civue_stroke(civue_ui *ui, civue_rect r, civue_color c, f32 width,
                   f32 radius) {
   civue_fill_stroke(ui, r, CIVUE_CLEAR, c, width, radius);
@@ -563,9 +583,16 @@ void civue_fade_out(civue_ui *ui, civue_rect r, civue_color color) {
   }
 }
 
+static void draw_icon(civue_ui *ui, civue_icon icon, civue_rect r,
+                      civue_color c, bool mirror) {
+  civue_atlas *mask = civue_gfx_atlas(ui->gfx),
+              *color = civue_gfx_color_atlas(ui->gfx);
+  civue_icons_draw(ui->icons, civue_list(ui), mask, color, icon, px(ui, r), c,
+                   mirror);
+}
+
 void civue_icon_at(civue_ui *ui, civue_icon icon, civue_rect r, civue_color c) {
-  civue_icons_draw(ui->icons, civue_list(ui), civue_gfx_atlas(ui->gfx), icon,
-                   px(ui, r), c, false);
+  draw_icon(ui, icon, r, c, false);
 }
 
 void civue_icon_mirrored(civue_ui *ui, civue_icon icon, civue_rect r, f32 size,
@@ -573,8 +600,7 @@ void civue_icon_mirrored(civue_ui *ui, civue_icon icon, civue_rect r, f32 size,
   f32 w = size, h = size;
   civue_icon_natural_size(ui->icons, icon, &w, &h);
   f64 x = r.x0 + (rect_w(r) - w) / 2, y = r.y0 + (rect_h(r) - h) / 2;
-  civue_icons_draw(ui->icons, civue_list(ui), civue_gfx_atlas(ui->gfx), icon,
-                   px(ui, rect_xywh(x, y, w, h)), c, true);
+  draw_icon(ui, icon, rect_xywh(x, y, w, h), c, true);
 }
 
 void civue_icon_centered(civue_ui *ui, civue_icon icon, civue_rect r, f32 size,
