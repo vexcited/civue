@@ -7,8 +7,8 @@ typedef struct {
   u64 generation;
 } Entry;
 
-// a width and a height read from an svg's header once: bit 0 width written, 1 height written, 2 both read, 3
-// cached.
+// a width and a height read from an svg's header once: bit 0 width written, 1
+// height written, 2 both read, 3 cached.
 typedef struct {
   f32 size[2];
   u8 known;
@@ -24,9 +24,12 @@ struct civue_icons {
   Natural *natural;
 };
 
-civue_icons *civue_icons_new(void) { return own_new(sizeof(civue_icons)); }
+civue_icons *civue_icons_new(void) {
+  return own_new(sizeof(civue_icons));
+}
 
-void civue_icons_use(civue_icons *ic, const civue_icon_svg *svgs, uint32_t count) {
+void civue_icons_use(civue_icons *ic, const civue_icon_svg *svgs,
+                     uint32_t count) {
   own_free(ic->natural);
   ic->svgs = svgs;
   ic->count = count;
@@ -36,24 +39,33 @@ void civue_icons_use(civue_icons *ic, const civue_icon_svg *svgs, uint32_t count
 }
 
 void civue_icons_free(civue_icons *ic) {
-  if (!ic) return;
+  if (!ic) {
+    return;
+  }
   map_free(&ic->index);
   vec_free(&ic->entries);
   own_free(ic->natural);
   own_free(ic);
 }
 
-// the svg of an icon and where its natural size is kept, nullptr for an icon nobody registered.
-static const civue_icon_svg *svg_of(civue_icons *ic, civue_icon icon, Natural **natural) {
+// the svg of an icon and where its natural size is kept, nullptr for an icon
+// nobody registered.
+static const civue_icon_svg *svg_of(civue_icons *ic, civue_icon icon,
+                                    Natural **natural) {
   const civue_icon_svg *s = icon < ic->count ? &ic->svgs[icon] : nullptr;
-  if (natural) *natural = s ? &ic->natural[icon] : nullptr;
+  if (natural) {
+    *natural = s ? &ic->natural[icon] : nullptr;
+  }
   return s;
 }
 
 static bool attr(const char *tag, usize n, const char *name, f32 *out) {
   usize k = strlen(name);
   for (usize i = 0; i + k + 3 < n; i++) {
-    if (tag[i] != ' ' || memcmp(tag + i + 1, name, k) || tag[i + 1 + k] != '=' || tag[i + 2 + k] != '"') continue;
+    if (tag[i] != ' ' || memcmp(tag + i + 1, name, k) ||
+        tag[i + 1 + k] != '=' || tag[i + 2 + k] != '"') {
+      continue;
+    }
     char *end;
     *out = strtof(tag + i + 3 + k, &end);
     return end != tag + i + 3 + k;
@@ -61,29 +73,40 @@ static bool attr(const char *tag, usize n, const char *name, f32 *out) {
   return false;
 }
 
-bool civue_icon_natural_size(civue_icons *ic, civue_icon icon, float *w, float *h) {
+bool civue_icon_natural_size(civue_icons *ic, civue_icon icon, float *w,
+                             float *h) {
   Natural *nat;
   const civue_icon_svg *s = svg_of(ic, icon, &nat);
-  if (!s) return false;
+  if (!s) {
+    return false;
+  }
   // read once from the svg header: asked for every icon of every frame.
   if (!nat->known) {
     const char *close = memchr(s->svg, '>', s->len);
     usize n = close ? (usize)(close - s->svg) : 0;
     f32 *v = nat->size;
     v[0] = v[1] = NAN;
-    bool ok = attr(s->svg, n, "width", &v[0]) && attr(s->svg, n, "height", &v[1]);
+    bool ok =
+      attr(s->svg, n, "width", &v[0]) && attr(s->svg, n, "height", &v[1]);
     nat->known = 8 | !isnan(v[0]) | !isnan(v[1]) << 1 | ok << 2;
   }
   // what the svg lacks keeps the caller's default.
-  if (nat->known & 1) *w = nat->size[0];
-  if (nat->known & 2) *h = nat->size[1];
+  if (nat->known & 1) {
+    *w = nat->size[0];
+  }
+  if (nat->known & 2) {
+    *h = nat->size[1];
+  }
   return nat->known & 4;
 }
 
-void civue_icons_draw(civue_icons *ic, civue_draw_list *d, civue_atlas *atlas, civue_icon icon, civue_rect r,
-                      civue_color c, bool mirror) {
+void civue_icons_draw(civue_icons *ic, civue_draw_list *d, civue_atlas *atlas,
+                      civue_icon icon, civue_rect r, civue_color c,
+                      bool mirror) {
   const civue_icon_svg *s = svg_of(ic, icon, nullptr);
-  if (!s) return;
+  if (!s) {
+    return;
+  }
   u32 w = (u32)fmax(round(rect_w(r)), 1), h = (u32)fmax(round(rect_h(r)), 1);
   u64 key = ((u64)icon << 40 | (u64)w << 20 | h) + 1;
   u64 at;
@@ -96,7 +119,9 @@ void civue_icons_draw(civue_icons *ic, civue_draw_list *d, civue_atlas *atlas, c
     }
     // the tint comes from the color, only coverage is kept.
     u8 *mask = cilo_malloc((usize)w * h);
-    for (usize i = 0; i < (usize)w * h; i++) mask[i] = rgba.v[i * 4 + 3];
+    for (usize i = 0; i < (usize)w * h; i++) {
+      mask[i] = rgba.v[i * 4 + 3];
+    }
     vec_free(&rgba);
     f32 uv[4];
     bool ok = civue_atlas_insert(atlas, w, h, mask, uv);
@@ -105,10 +130,13 @@ void civue_icons_draw(civue_icons *ic, civue_draw_list *d, civue_atlas *atlas, c
       ok = civue_atlas_insert(atlas, w, h, mask, uv);
     }
     cilo_mfree(mask);
-    if (!ok) return;
+    if (!ok) {
+      return;
+    }
     Entry n = {{uv[0], uv[1], uv[2], uv[3]}, atlas->generation};
-    if (e)
+    if (e) {
       *e = n;
+    }
     else {
       vec_push(&ic->entries, n);
       map_put(&ic->index, key, ic->entries.len);
@@ -116,6 +144,8 @@ void civue_icons_draw(civue_icons *ic, civue_draw_list *d, civue_atlas *atlas, c
     }
   }
   f32 uv[4] = {e->uv[0], e->uv[1], e->uv[2], e->uv[3]};
-  if (mirror) uv[0] = e->uv[2], uv[2] = e->uv[0];
+  if (mirror) {
+    uv[0] = e->uv[2], uv[2] = e->uv[0];
+  }
   civue_dl_mask(d, rect_xywh(round(r.x0), round(r.y0), w, h), uv, c, 1);
 }

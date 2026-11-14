@@ -7,9 +7,12 @@
 extern "C" {
 #endif
 
-/* ========================================================================================================== */
-/* text fields: one line or several, edited with the keyboard, the pointer, the clipboard and input methods.  */
-/* ========================================================================================================== */
+/* ==========================================================================================================
+ */
+/* text fields: one line or several, edited with the keyboard, the pointer, the
+ * clipboard and input methods.  */
+/* ==========================================================================================================
+ */
 
 // what a text field did this frame.
 typedef struct {
@@ -37,12 +40,16 @@ typedef struct {
 
 // a single line text field editing `*value`, a malloc'd string replaced
 // when it changes, nullptr for empty.
-civue_field_response civue_text_field(civue_ui *ui, civue_id id, civue_rect r, char **value, const char *placeholder,
-                                      civue_text_style style, civue_field_look look);
+civue_field_response civue_text_field(civue_ui *ui, civue_id id, civue_rect r,
+                                      char **value, const char *placeholder,
+                                      civue_text_style style,
+                                      civue_field_look look);
 // several lines wrapped to the field's width from its top: enter starts a
 // line and the arrows move between them.
-civue_field_response civue_text_area(civue_ui *ui, civue_id id, civue_rect r, char **value, const char *placeholder,
-                                     civue_text_style style, civue_field_look look);
+civue_field_response civue_text_area(civue_ui *ui, civue_id id, civue_rect r,
+                                     char **value, const char *placeholder,
+                                     civue_text_style style,
+                                     civue_field_look look);
 // puts `text` at the caret of the focused field `id`, as a button beside it
 // types. its whole text after, malloc'd, nullptr when it isn't editing.
 char *civue_field_insert(civue_ui *ui, civue_id id, const char *text);

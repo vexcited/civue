@@ -69,7 +69,9 @@ civue_text_system *civue_text_new(void) {
 }
 
 static void forget_layouts(civue_text_system *t) {
-  vec_each(&t->made, f) CFRelease(f->font);
+  vec_each(&t->made, f) {
+    CFRelease(f->font);
+  }
   vec_clear(&t->made);
   map_clear(&t->made_index);
   vec_each(&t->layouts, l) {
@@ -84,41 +86,58 @@ static void forget_layouts(civue_text_system *t) {
 }
 
 void civue_text_free(civue_text_system *t) {
-  if (!t) return;
+  if (!t) {
+    return;
+  }
   forget_layouts(t);
   vec_free(&t->layouts);
   map_free(&t->layout_index);
   vec_free(&t->made);
   map_free(&t->made_index);
-  vec_each(&t->fonts, f) CFRelease(f->font);
+  vec_each(&t->fonts, f) {
+    CFRelease(f->font);
+  }
   vec_free(&t->fonts);
   map_free(&t->font_index);
   vec_free(&t->glyphs);
   map_free(&t->glyph_index);
   CFRelease(t->ui);
   CFRelease(t->code);
-  for (u32 i = 0; i <= CIVUE_TEXT_FACES; i++)
-    if (t->display[i]) CFRelease(t->display[i]);
+  for (u32 i = 0; i <= CIVUE_TEXT_FACES; i++) {
+    if (t->display[i]) {
+      CFRelease(t->display[i]);
+    }
+  }
   own_free(t);
 }
 
-void civue_text_register_display(civue_text_system *t, u8 display, const u8 *data, usize n) {
-  if (!display || display > CIVUE_TEXT_FACES) return;
+void civue_text_register_display(civue_text_system *t, u8 display,
+                                 const u8 *data, usize n) {
+  if (!display || display > CIVUE_TEXT_FACES) {
+    return;
+  }
   CFDataRef d = CFDataCreate(nullptr, data, n);
   CTFontDescriptorRef desc = CTFontManagerCreateFontDescriptorFromData(d);
   CFRelease(d);
-  if (!desc) return;
-  if (t->display[display]) CFRelease(t->display[display]);
+  if (!desc) {
+    return;
+  }
+  if (t->display[display]) {
+    CFRelease(t->display[display]);
+  }
   t->display[display] = desc;
   // text laid out before it is laid out again.
   forget_layouts(t);
 }
 
-void civue_text_set_face(civue_text_system *t, civue_face face, const u8 *data, usize n) {
+void civue_text_set_face(civue_text_system *t, civue_face face, const u8 *data,
+                         usize n) {
   CFDataRef d = CFDataCreate(nullptr, data, n);
   CTFontDescriptorRef desc = CTFontManagerCreateFontDescriptorFromData(d);
   CFRelease(d);
-  if (!desc) return;
+  if (!desc) {
+    return;
+  }
   CTFontDescriptorRef *slot = face == CIVUE_FACE_CODE ? &t->code : &t->ui;
   CFRelease(*slot);
   *slot = desc;
@@ -137,22 +156,29 @@ static u32 font_of(civue_text_system *t, CTFontRef font) {
       map_put(&t->font_index, k, t->fonts.len);
       return t->fonts.len - 1;
     }
-    if (CFEqual(t->fonts.v[at - 1].font, font)) return at - 1;
+    if (CFEqual(t->fonts.v[at - 1].font, font)) {
+      return at - 1;
+    }
   }
 }
 
-static CTFontRef make_font(civue_text_system *t, civue_text_style s, f32 scale) {
+static CTFontRef make_font(civue_text_system *t, civue_text_style s,
+                           f32 scale) {
   CTFontDescriptorRef base = s.mono ? t->code : t->ui;
-  if (s.display && t->display[s.display]) base = t->display[s.display];
+  if (s.display && t->display[s.display]) {
+    base = t->display[s.display];
+  }
   CFMutableDictionaryRef attrs =
-      CFDictionaryCreateMutable(nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionaryCreateMutable(nullptr, 0, &kCFTypeDictionaryKeyCallBacks,
+                              &kCFTypeDictionaryValueCallBacks);
   i32 tag = WGHT;
   f64 weight = s.weight;
   CFNumberRef tag_n = CFNumberCreate(nullptr, kCFNumberSInt32Type, &tag);
   CFNumberRef weight_n = CFNumberCreate(nullptr, kCFNumberFloat64Type, &weight);
   const void *vk[] = {tag_n}, *vv[] = {weight_n};
   CFDictionaryRef variation =
-      CFDictionaryCreate(nullptr, vk, vv, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionaryCreate(nullptr, vk, vv, 1, &kCFTypeDictionaryKeyCallBacks,
+                       &kCFTypeDictionaryValueCallBacks);
   CFDictionarySetValue(attrs, kCTFontVariationAttribute, variation);
   if (s.tnum) {
     const void *fk[] = {kCTFontOpenTypeFeatureTag, kCTFontOpenTypeFeatureValue};
@@ -160,8 +186,10 @@ static CTFontRef make_font(civue_text_system *t, civue_text_style s, f32 scale) 
     CFNumberRef one_n = CFNumberCreate(nullptr, kCFNumberSInt32Type, &one);
     const void *fv[] = {CFSTR("tnum"), one_n};
     CFDictionaryRef feature =
-        CFDictionaryCreate(nullptr, fk, fv, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    CFArrayRef features = CFArrayCreate(nullptr, (const void **)&feature, 1, &kCFTypeArrayCallBacks);
+      CFDictionaryCreate(nullptr, fk, fv, 2, &kCFTypeDictionaryKeyCallBacks,
+                         &kCFTypeDictionaryValueCallBacks);
+    CFArrayRef features = CFArrayCreate(nullptr, (const void **)&feature, 1,
+                                        &kCFTypeArrayCallBacks);
     CFDictionarySetValue(attrs, kCTFontFeatureSettingsAttribute, features);
     CFRelease(features);
     CFRelease(feature);
@@ -169,12 +197,15 @@ static CTFontRef make_font(civue_text_system *t, civue_text_style s, f32 scale) 
   }
   if (s.emoji) {
     // emoji first, the ui face for what it lacks.
-    CTFontDescriptorRef emoji = CTFontDescriptorCreateWithNameAndSize(CFSTR("AppleColorEmoji"), 0);
-    CFArrayRef cascade = CFArrayCreate(nullptr, (const void **)&base, 1, &kCFTypeArrayCallBacks);
+    CTFontDescriptorRef emoji =
+      CTFontDescriptorCreateWithNameAndSize(CFSTR("AppleColorEmoji"), 0);
+    CFArrayRef cascade =
+      CFArrayCreate(nullptr, (const void **)&base, 1, &kCFTypeArrayCallBacks);
     CFDictionarySetValue(attrs, kCTFontCascadeListAttribute, cascade);
     CFRelease(cascade);
     base = emoji;
-  } else {
+  }
+  else {
     CFRetain(base);
   }
   CTFontDescriptorRef d = CTFontDescriptorCreateCopyWithAttributes(base, attrs);
@@ -189,15 +220,22 @@ static CTFontRef make_font(civue_text_system *t, civue_text_style s, f32 scale) 
 }
 
 static CTFontRef font_for(civue_text_system *t, civue_text_style s, f32 scale) {
-  MadeFont want = {s.weight, s.size * scale, (u32)(s.mono | s.tnum << 1 | s.emoji << 2) | (u32)s.display << 3};
+  MadeFont want = {s.weight, s.size * scale,
+                   (u32)(s.mono | s.tnum << 1 | s.emoji << 2) | (u32)s.display
+                                                                  << 3};
   u32 bits[3] = {want.flags};
   memcpy(bits + 1, &want.weight, 8);
   u64 key = hash_bytes(bits, sizeof bits) | 1;
   for (;; key = hash_u64(key) | 1) {
     u64 at;
-    if (!map_get(&t->made_index, key, &at)) break;
+    if (!map_get(&t->made_index, key, &at)) {
+      break;
+    }
     const MadeFont *m = &t->made.v[at - 1];
-    if (m->weight == want.weight && m->size == want.size && m->flags == want.flags) return m->font;
+    if (m->weight == want.weight && m->size == want.size &&
+        m->flags == want.flags) {
+      return m->font;
+    }
   }
   want.font = make_font(t, s, scale);
   vec_push(&t->made, want);
@@ -205,16 +243,18 @@ static CTFontRef font_for(civue_text_system *t, civue_text_style s, f32 scale) {
   return want.font;
 }
 
-static u64 layout_key(const char *s, usize n, civue_text_style st, f32 max_width, f32 scale) {
+static u64 layout_key(const char *s, usize n, civue_text_style st,
+                      f32 max_width, f32 scale) {
   u64 h = hash_bytes(s, n);
-  f32 v[] = {st.size, st.weight, st.line_height, st.letter_spacing, max_width, scale};
+  f32 v[] = {st.size,           st.weight, st.line_height,
+             st.letter_spacing, max_width, scale};
   h ^= hash_bytes(v, sizeof v) * 0x9e3779b97f4a7c15ull;
   h ^= hash_u64(st.mono | st.tnum << 1 | st.emoji << 2 | (u64)st.display << 3);
   return h | 1;
 }
 
-static civue_text_block *build(civue_text_system *t, const char *s, usize n, civue_text_style st, f32 max_width,
-                               f32 scale) {
+static civue_text_block *build(civue_text_system *t, const char *s, usize n,
+                               civue_text_style st, f32 max_width, f32 scale) {
   civue_text_block *b = own_new(sizeof *b);
   b->scale = scale;
   // utf-16 indices to bytes, both halves of a pair at its character.
@@ -223,18 +263,24 @@ static civue_text_block *build(civue_text_system *t, const char *s, usize n, civ
     usize at = i;
     u32 cp = utf8_next(s, n, &i);
     vec_push(&bytes16, (u32)at);
-    if (cp >= 0x10000) vec_push(&bytes16, (u32)at);
+    if (cp >= 0x10000) {
+      vec_push(&bytes16, (u32)at);
+    }
   }
   vec_push(&bytes16, (u32)n);
-  CFStringRef str = CFStringCreateWithBytes(nullptr, (const u8 *)s, n, kCFStringEncodingUTF8, false);
-  if (!str) str = CFSTR("");
+  CFStringRef str = CFStringCreateWithBytes(nullptr, (const u8 *)s, n,
+                                            kCFStringEncodingUTF8, false);
+  if (!str) {
+    str = CFSTR("");
+  }
   CTFontRef font = font_for(t, st, scale);
   f64 kern = st.letter_spacing * scale;
   CFNumberRef kern_n = CFNumberCreate(nullptr, kCFNumberFloat64Type, &kern);
   const void *ak[] = {kCTFontAttributeName, kCTKernAttributeName};
   const void *av[] = {font, kern_n};
   CFDictionaryRef attrs =
-      CFDictionaryCreate(nullptr, ak, av, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionaryCreate(nullptr, ak, av, 2, &kCFTypeDictionaryKeyCallBacks,
+                       &kCFTypeDictionaryValueCallBacks);
   CFAttributedStringRef astr = CFAttributedStringCreate(nullptr, str, attrs);
   CTTypesetterRef ts = CTTypesetterCreateWithAttributedString(astr);
   CFIndex len16 = CFStringGetLength(str);
@@ -250,16 +296,22 @@ static civue_text_block *build(civue_text_system *t, const char *s, usize n, civ
   u32 lines = 0;
   CFIndex start = 0;
   do {
-    CFIndex count = max_width > 0 ? CTTypesetterSuggestLineBreak(ts, start, max_width * scale) : len16 - start;
-    if (count <= 0) count = len16 - start;
+    CFIndex count =
+      max_width > 0 ? CTTypesetterSuggestLineBreak(ts, start, max_width * scale)
+                    : len16 - start;
+    if (count <= 0) {
+      count = len16 - start;
+    }
     CTLineRef line = CTTypesetterCreateLine(ts, CFRangeMake(start, count));
     f64 y = first + lines * lh;
-    f64 w = CTLineGetTypographicBounds(line, nullptr, nullptr, nullptr) - CTLineGetTrailingWhitespaceWidth(line);
+    f64 w = CTLineGetTypographicBounds(line, nullptr, nullptr, nullptr) -
+            CTLineGetTrailingWhitespaceWidth(line);
     width = fmax(width, w);
     CFArrayRef runs = CTLineGetGlyphRuns(line);
     for (CFIndex r = 0; r < CFArrayGetCount(runs); r++) {
       CTRunRef run = CFArrayGetValueAtIndex(runs, r);
-      CTFontRef rf = CFDictionaryGetValue(CTRunGetAttributes(run), kCTFontAttributeName);
+      CTFontRef rf =
+        CFDictionaryGetValue(CTRunGetAttributes(run), kCTFontAttributeName);
       u32 fi = font_of(t, rf ? rf : font);
       CFIndex ng = CTRunGetGlyphCount(run);
       CGGlyph gs[ng ? ng : 1];
@@ -270,12 +322,15 @@ static civue_text_block *build(civue_text_system *t, const char *s, usize n, civ
       CTRunGetStringIndices(run, CFRangeMake(0, 0), is);
       for (CFIndex g = 0; g < ng; g++) {
         u32 byte = is[g] < bytes16.len ? bytes16.v[is[g]] : (u32)n;
-        vec_push(&glyphs, ((civue_glyph){byte, fi, gs[g], (f32)ps[g].x, (f32)(y - ps[g].y)}));
+        vec_push(&glyphs, ((civue_glyph){byte, fi, gs[g], (f32)ps[g].x,
+                                         (f32)(y - ps[g].y)}));
       }
     }
     for (CFIndex k = start; k < start + count; k++) {
       // a stop at each character, not inside surrogate pairs.
-      if (k > start && bytes16.v[k] == bytes16.v[k - 1]) continue;
+      if (k > start && bytes16.v[k] == bytes16.v[k - 1]) {
+        continue;
+      }
       f64 x = CTLineGetOffsetForStringIndex(line, k, nullptr);
       vec_push(&carets, ((civue_caret){bytes16.v[k], (f32)(x / scale), lines}));
     }
@@ -283,9 +338,13 @@ static civue_text_block *build(civue_text_system *t, const char *s, usize n, civ
     bool last = start + count >= len16;
     CFIndex end = start + count;
     f64 end_x = CTLineGetOffsetForStringIndex(line, end, nullptr);
-    if (last) vec_push(&carets, ((civue_caret){(u32)n, (f32)(end_x / scale), lines}));
-    vec_push(&tlines, ((civue_text_line){bytes16.v[start], end < bytes16.len ? bytes16.v[end] : (u32)n,
-                                         (f32)(lines * lh / scale), (f32)(y / scale)}));
+    if (last) {
+      vec_push(&carets, ((civue_caret){(u32)n, (f32)(end_x / scale), lines}));
+    }
+    vec_push(&tlines,
+             ((civue_text_line){bytes16.v[start],
+                                end < bytes16.len ? bytes16.v[end] : (u32)n,
+                                (f32)(lines * lh / scale), (f32)(y / scale)}));
     CFRelease(line);
     lines++;
     start += count;
@@ -307,7 +366,8 @@ static civue_text_block *build(civue_text_system *t, const char *s, usize n, civ
   return b;
 }
 
-const civue_text_block *civue_text_layout(civue_text_system *t, const char *s, usize n, civue_text_style style,
+const civue_text_block *civue_text_layout(civue_text_system *t, const char *s,
+                                          usize n, civue_text_style style,
                                           f32 max_width, f32 scale) {
   u64 key = layout_key(s, n, style, max_width, scale);
   u64 at;
@@ -328,7 +388,8 @@ const civue_text_block *civue_text_layout(civue_text_system *t, const char *s, u
     free(old->block->lines);
     own_free(old->block);
     *old = l;
-  } else {
+  }
+  else {
     vec_push(&t->layouts, l);
     map_put(&t->layout_index, key, t->layouts.len);
   }
@@ -337,7 +398,9 @@ const civue_text_block *civue_text_layout(civue_text_system *t, const char *s, u
 
 void civue_text_end_frame(civue_text_system *t) {
   t->frame++;
-  if (t->frame % 120) return;
+  if (t->frame % 120) {
+    return;
+  }
   // blocks live until the end of the frame after they were last asked.
   u32 k = 0;
   map_clear(&t->layout_index);
@@ -358,16 +421,19 @@ void civue_text_end_frame(civue_text_system *t) {
 
 // a glyph's bitmap and where it goes from its pen position, coverage or
 // premultiplied rgba for color glyphs.
-static bool rasterize(const Font *f, u16 id, u32 subpixel, civue_bytes *out, i32 *left, i32 *top, u32 *w, u32 *h) {
+static bool rasterize(const Font *f, u16 id, u32 subpixel, civue_bytes *out,
+                      i32 *left, i32 *top, u32 *w, u32 *h) {
   CGGlyph g = id;
   CGRect r;
-  CTFontGetBoundingRectsForGlyphs(f->font, kCTFontOrientationHorizontal, &g, &r, 1);
+  CTFontGetBoundingRectsForGlyphs(f->font, kCTFontOrientationHorizontal, &g, &r,
+                                  1);
   f64 dx = (f64)subpixel / SUBPIXELS;
   if (r.size.width <= 0 || r.size.height <= 0) {
     *w = *h = 0;
     return true;
   }
-  f64 x0 = floor(r.origin.x + dx) - 1, x1 = ceil(r.origin.x + r.size.width + dx) + 1;
+  f64 x0 = floor(r.origin.x + dx) - 1,
+      x1 = ceil(r.origin.x + r.size.width + dx) + 1;
   f64 y0 = floor(r.origin.y) - 1, y1 = ceil(r.origin.y + r.size.height) + 1;
   *w = (u32)(x1 - x0);
   *h = (u32)(y1 - y0);
@@ -378,12 +444,18 @@ static bool rasterize(const Font *f, u16 id, u32 subpixel, civue_bytes *out, i32
   vec_reserve(out, (usize)*w * *h * bpp);
   memset(out->v, 0, (usize)*w * *h * bpp);
   out->len = (usize)*w * *h * bpp;
-  CGColorSpaceRef space = f->color ? CGColorSpaceCreateWithName(kCGColorSpaceSRGB) : nullptr;
-  CGContextRef ctx =
-      CGBitmapContextCreate(out->v, *w, *h, 8, *w * bpp, space,
-                            f->color ? (CGBitmapInfo)kCGImageAlphaPremultipliedLast : (CGBitmapInfo)kCGImageAlphaOnly);
-  if (space) CGColorSpaceRelease(space);
-  if (!ctx) return false;
+  CGColorSpaceRef space =
+    f->color ? CGColorSpaceCreateWithName(kCGColorSpaceSRGB) : nullptr;
+  CGContextRef ctx = CGBitmapContextCreate(
+    out->v, *w, *h, 8, *w * bpp, space,
+    f->color ? (CGBitmapInfo)kCGImageAlphaPremultipliedLast
+             : (CGBitmapInfo)kCGImageAlphaOnly);
+  if (space) {
+    CGColorSpaceRelease(space);
+  }
+  if (!ctx) {
+    return false;
+  }
   CGContextSetShouldAntialias(ctx, true);
   CGContextSetShouldSmoothFonts(ctx, false);
   CGContextSetShouldSubpixelPositionFonts(ctx, true);
@@ -395,17 +467,22 @@ static bool rasterize(const Font *f, u16 id, u32 subpixel, civue_bytes *out, i32
   return true;
 }
 
-static const GlyphEntry *glyph(civue_text_system *t, civue_atlas *mask, civue_atlas *color, const civue_glyph *g,
+static const GlyphEntry *glyph(civue_text_system *t, civue_atlas *mask,
+                               civue_atlas *color, const civue_glyph *g,
                                u32 subpixel) {
   const Font *f = &t->fonts.v[g->font];
-  if (f->color) subpixel = 0;
+  if (f->color) {
+    subpixel = 0;
+  }
   u64 key = hash_u64((u64)g->font << 24 ^ (u64)g->id << 4 ^ subpixel) | 1;
   u64 at;
   GlyphEntry *e = nullptr;
   if (map_get(&t->glyph_index, key, &at)) {
     e = &t->glyphs.v[at - 1];
     civue_atlas *a = e->color ? color : mask;
-    if (e->generation == a->generation) return e;
+    if (e->generation == a->generation) {
+      return e;
+    }
   }
   civue_bytes px = {};
   i32 left = 0, top = 0;
@@ -425,7 +502,9 @@ static const GlyphEntry *glyph(civue_text_system *t, civue_atlas *mask, civue_at
     }
   }
   vec_free(&px);
-  GlyphEntry n = {key, {uv[0], uv[1], uv[2], uv[3]}, f->color, left, top, w, h, a->generation};
+  GlyphEntry n = {
+    key,          {uv[0], uv[1], uv[2], uv[3]}, f->color, left, top, w, h,
+    a->generation};
   if (map_get(&t->glyph_index, key, &at)) {
     t->glyphs.v[at - 1] = n;
     return &t->glyphs.v[at - 1];
@@ -435,30 +514,37 @@ static const GlyphEntry *glyph(civue_text_system *t, civue_atlas *mask, civue_at
   return &vec_last(&t->glyphs);
 }
 
-void civue_text_draw(civue_text_system *t, civue_draw_list *d, civue_atlas *mask, civue_atlas *color,
-                     const civue_text_block *b, civue_vec2 origin, civue_color base, const civue_text_span *spans,
+void civue_text_draw(civue_text_system *t, civue_draw_list *d,
+                     civue_atlas *mask, civue_atlas *color,
+                     const civue_text_block *b, civue_vec2 origin,
+                     civue_color base, const civue_text_span *spans,
                      u32 nspans) {
   f64 s = b->scale;
   f64 ox = origin.x * s, oy = round(origin.y * s);
   for (u32 i = 0; i < b->nglyphs; i++) {
     const civue_glyph *g = &b->glyphs[i];
     civue_color c = base;
-    for (u32 k = 0; k < nspans; k++)
+    for (u32 k = 0; k < nspans; k++) {
       if (g->byte >= spans[k].start && g->byte < spans[k].end) {
         c = spans[k].color;
         break;
       }
+    }
     // light text on dark grounds looks thinner, browsers boost it.
     f32 gamma = 1 - 0.45f * (0.2126f * c.r + 0.7152f * c.g + 0.0722f * c.b);
     f64 x = ox + g->x, px = floor(x);
     u32 sub = (u32)floor((x - px) * SUBPIXELS) % SUBPIXELS;
     f64 y = round(oy + g->y);
     const GlyphEntry *e = glyph(t, mask, color, g, sub);
-    if (!e || !e->w || !e->h) continue;
+    if (!e || !e->w || !e->h) {
+      continue;
+    }
     civue_rect r = rect_xywh(px + e->left, y + e->top, e->w, e->h);
-    if (e->color)
+    if (e->color) {
       civue_dl_color_glyph(d, r, e->uv, c.a);
-    else
+    }
+    else {
       civue_dl_mask(d, r, e->uv, c, gamma);
+    }
   }
 }

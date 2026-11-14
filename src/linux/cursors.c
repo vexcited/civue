@@ -38,17 +38,25 @@ static struct {
 
 void civue__cursors_use(const civue_window_options *o) {
   C.image = o->cursor_image;
-  if (o->cursor_points) C.points = o->cursor_points;
-  if (o->cursor_pixels) C.most = o->cursor_pixels;
+  if (o->cursor_points) {
+    C.points = o->cursor_points;
+  }
+  if (o->cursor_pixels) {
+    C.most = o->cursor_pixels;
+  }
 }
 
-void civue__cursors_set_scale(f32 s) { C.scale = s > 0 ? s : 1; }
+void civue__cursors_set_scale(f32 s) {
+  C.scale = s > 0 ? s : 1;
+}
 
 // a buffer of `w` by `h` premultiplied pixels in wayland's argb order.
 static struct wl_buffer *shm_buffer(const u8 *rgba, u32 w, u32 h) {
   usize size = (usize)w * h * 4;
   int fd = memfd_create("civue-cursor", MFD_CLOEXEC);
-  if (fd < 0) return nullptr;
+  if (fd < 0) {
+    return nullptr;
+  }
   if (ftruncate(fd, (off_t)size) < 0) {
     close(fd);
     return nullptr;
@@ -66,7 +74,8 @@ static struct wl_buffer *shm_buffer(const u8 *rgba, u32 w, u32 h) {
   }
   munmap(px, size);
   struct wl_shm_pool *pool = wl_shm_create_pool(WL.shm, fd, (i32)size);
-  struct wl_buffer *b = wl_shm_pool_create_buffer(pool, 0, (i32)w, (i32)h, (i32)w * 4, WL_SHM_FORMAT_ARGB8888);
+  struct wl_buffer *b = wl_shm_pool_create_buffer(
+    pool, 0, (i32)w, (i32)h, (i32)w * 4, WL_SHM_FORMAT_ARGB8888);
   wl_shm_pool_destroy(pool);
   close(fd);
   return b;
@@ -74,7 +83,11 @@ static struct wl_buffer *shm_buffer(const u8 *rgba, u32 w, u32 h) {
 
 // the app's image of `c` at `pixels`, nullptr for the system's cursors.
 static const Made *made(civue_cursor c, u32 pixels) {
-  vec_each(&C.made, m) if (m->kind == c.kind && m->angle == c.angle && m->pixels == pixels) return m;
+  vec_each(&C.made, m) {
+    if (m->kind == c.kind && m->angle == c.angle && m->pixels == pixels) {
+      return m;
+    }
+  }
   Made m = {c.kind, c.angle, pixels};
   civue_cursor_image img = {};
   if (C.image && C.image(c, pixels, &img)) {
@@ -97,15 +110,26 @@ typedef struct {
 
 static System system_of(civue_cursor_kind k) {
   switch (k) {
-  case CIVUE_CURSOR_POINTER: return (System){WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_POINTER, {"pointer", "hand2"}};
-  case CIVUE_CURSOR_TEXT: return (System){WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_TEXT, {"text", "xterm"}};
-  case CIVUE_CURSOR_RESIZE_H:
-    return (System){WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_EW_RESIZE, {"ew-resize", "sb_h_double_arrow"}};
-  case CIVUE_CURSOR_RESIZE_V:
-    return (System){WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NS_RESIZE, {"ns-resize", "sb_v_double_arrow"}};
-  case CIVUE_CURSOR_RESIZE_E: return (System){WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_E_RESIZE, {"e-resize", "right_side"}};
-  case CIVUE_CURSOR_RESIZE_W: return (System){WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_W_RESIZE, {"w-resize", "left_side"}};
-  default: return (System){WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT, {"default", "left_ptr"}};
+    case CIVUE_CURSOR_POINTER:
+      return (System){WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_POINTER,
+                      {"pointer", "hand2"}};
+    case CIVUE_CURSOR_TEXT:
+      return (System){WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_TEXT, {"text", "xterm"}};
+    case CIVUE_CURSOR_RESIZE_H:
+      return (System){WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_EW_RESIZE,
+                      {"ew-resize", "sb_h_double_arrow"}};
+    case CIVUE_CURSOR_RESIZE_V:
+      return (System){WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NS_RESIZE,
+                      {"ns-resize", "sb_v_double_arrow"}};
+    case CIVUE_CURSOR_RESIZE_E:
+      return (System){WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_E_RESIZE,
+                      {"e-resize", "right_side"}};
+    case CIVUE_CURSOR_RESIZE_W:
+      return (System){WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_W_RESIZE,
+                      {"w-resize", "left_side"}};
+    default:
+      return (System){WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT,
+                      {"default", "left_ptr"}};
   }
 }
 
@@ -120,43 +144,59 @@ static struct wl_cursor_image *theme_image(const System *sys, u32 pixels) {
     C.theme = wl_cursor_theme_load(name, (int)pixels, WL.shm);
     C.theme_pixels = pixels;
   }
-  if (!C.theme) return nullptr;
+  if (!C.theme) {
+    return nullptr;
+  }
   for (u32 i = 0; i < 2; i++) {
     struct wl_cursor *c = wl_cursor_theme_get_cursor(C.theme, sys->names[i]);
-    if (c && c->image_count) return c->images[0];
+    if (c && c->image_count) {
+      return c->images[0];
+    }
   }
   return nullptr;
 }
 
 // shows `b`, `pixels` wide, on `surface` at `points` wide.
-static void show(struct wl_surface *surface, struct wp_viewport *viewport, struct wl_buffer *b, u32 pixels,
-                 f32 points) {
+static void show(struct wl_surface *surface, struct wp_viewport *viewport,
+                 struct wl_buffer *b, u32 pixels, f32 points) {
   wl_surface_attach(surface, b, 0, 0);
-  if (viewport)
-    wp_viewport_set_destination(viewport, (i32)lroundf(points), (i32)lroundf(points));
-  else
+  if (viewport) {
+    wp_viewport_set_destination(viewport, (i32)lroundf(points),
+                                (i32)lroundf(points));
+  }
+  else {
     wl_surface_set_buffer_scale(surface, (i32)MAX(lroundf(pixels / points), 1));
+  }
   wl_surface_damage_buffer(surface, 0, 0, INT32_MAX, INT32_MAX);
   wl_surface_commit(surface);
 }
 
 // a surface for a device's cursor, with its viewport when there are any.
 static void cursor_surface(struct wl_surface **s, struct wp_viewport **v) {
-  if (*s) return;
+  if (*s) {
+    return;
+  }
   *s = wl_compositor_create_surface(WL.compositor);
-  if (WL.viewporter) *v = wp_viewporter_get_viewport(WL.viewporter, *s);
+  if (WL.viewporter) {
+    *v = wp_viewporter_get_viewport(WL.viewporter, *s);
+  }
 }
 
 // shows `b` at `points` wide for the pointer, or the stylus when `tool`.
-static void attach(bool tool, struct wl_buffer *b, u32 pixels, f32 points, f32 hx, f32 hy) {
+static void attach(bool tool, struct wl_buffer *b, u32 pixels, f32 points,
+                   f32 hx, f32 hy) {
   struct wl_surface **surface = tool ? &C.tool_surface : &C.surface;
   struct wp_viewport **viewport = tool ? &C.tool_viewport : &C.viewport;
   cursor_surface(surface, viewport);
   show(*surface, *viewport, b, pixels, points);
-  if (tool)
-    zwp_tablet_tool_v2_set_cursor(WL.tool, WL.tool_serial, *surface, (i32)lroundf(hx), (i32)lroundf(hy));
-  else
-    wl_pointer_set_cursor(WL.pointer, WL.pointer_serial, *surface, (i32)lroundf(hx), (i32)lroundf(hy));
+  if (tool) {
+    zwp_tablet_tool_v2_set_cursor(WL.tool, WL.tool_serial, *surface,
+                                  (i32)lroundf(hx), (i32)lroundf(hy));
+  }
+  else {
+    wl_pointer_set_cursor(WL.pointer, WL.pointer_serial, *surface,
+                          (i32)lroundf(hx), (i32)lroundf(hy));
+  }
 }
 
 // a system cursor for the pointer, or the stylus when `tool`: the
@@ -169,20 +209,30 @@ static void set_system(bool tool, System sys) {
       *d = nullptr;
     }
     if (!*d) {
-      *d = tool ? wp_cursor_shape_manager_v1_get_tablet_tool_v2(WL.cursor_shapes, WL.tool)
-                : wp_cursor_shape_manager_v1_get_pointer(WL.cursor_shapes, WL.pointer);
-      if (tool) C.shaped_tool = WL.tool;
+      *d = tool ? wp_cursor_shape_manager_v1_get_tablet_tool_v2(
+                    WL.cursor_shapes, WL.tool)
+                : wp_cursor_shape_manager_v1_get_pointer(WL.cursor_shapes,
+                                                         WL.pointer);
+      if (tool) {
+        C.shaped_tool = WL.tool;
+      }
     }
-    wp_cursor_shape_device_v1_set_shape(*d, tool ? WL.tool_serial : WL.pointer_serial, sys.shape);
+    wp_cursor_shape_device_v1_set_shape(
+      *d, tool ? WL.tool_serial : WL.pointer_serial, sys.shape);
     return;
   }
   // the theme's cursors are drawn at the size it says, 24 points as a rule.
   u32 size = 24;
   const char *env = getenv("XCURSOR_SIZE");
-  if (env && atoi(env) > 0) size = (u32)atoi(env);
+  if (env && atoi(env) > 0) {
+    size = (u32)atoi(env);
+  }
   struct wl_cursor_image *img = theme_image(&sys, (u32)lroundf(size * C.scale));
-  if (!img) return;
-  attach(tool, wl_cursor_image_get_buffer(img), img->width, img->width / C.scale, img->hotspot_x / C.scale,
+  if (!img) {
+    return;
+  }
+  attach(tool, wl_cursor_image_get_buffer(img), img->width,
+         img->width / C.scale, img->hotspot_x / C.scale,
          img->hotspot_y / C.scale);
 }
 
@@ -191,34 +241,52 @@ static void apply(civue_cursor c, bool tool) {
   // the app's images show at the window's scale, no more than their pixels.
   u32 pixels = (u32)MIN(roundf(C.points * C.scale), (f32)C.most);
   const Made *m = made(c, pixels);
-  if (m->buffer)
+  if (m->buffer) {
     attach(tool, m->buffer, pixels, C.points, m->hot_x, m->hot_y);
-  else
+  }
+  else {
     set_system(tool, system_of(c.kind));
+  }
 }
 
 void civue__cursors_set(civue_cursor c) {
   C.now = c;
   C.set = true;
-  if (WL.pointer && WL.pointer_serial) apply(c, false);
-  if (WL.tool) apply(c, true);
+  if (WL.pointer && WL.pointer_serial) {
+    apply(c, false);
+  }
+  if (WL.tool) {
+    apply(c, true);
+  }
 }
 
 void civue__cursors_set_edge(u32 edge) {
   // xdg shell's edges: top 1, bottom 2, left 4, right 8 and their sums.
   static const System edges[] = {
-      [1] = {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_N_RESIZE, {"n-resize", "top_side"}},
-      [2] = {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_S_RESIZE, {"s-resize", "bottom_side"}},
-      [4] = {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_W_RESIZE, {"w-resize", "left_side"}},
-      [5] = {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NW_RESIZE, {"nw-resize", "top_left_corner"}},
-      [6] = {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_SW_RESIZE, {"sw-resize", "bottom_left_corner"}},
-      [8] = {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_E_RESIZE, {"e-resize", "right_side"}},
-      [9] = {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NE_RESIZE, {"ne-resize", "top_right_corner"}},
-      [10] = {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_SE_RESIZE, {"se-resize", "bottom_right_corner"}}};
-  if (edge >= countof(edges) || !edges[edge].names[0]) return;
-  if (WL.pointer && WL.pointer_serial) set_system(false, edges[edge]);
+    [1] = {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_N_RESIZE, {"n-resize", "top_side"}},
+    [2] = {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_S_RESIZE,
+           {"s-resize", "bottom_side"}},
+    [4] = {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_W_RESIZE, {"w-resize", "left_side"}},
+    [5] = {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NW_RESIZE,
+           {"nw-resize", "top_left_corner"}},
+    [6] = {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_SW_RESIZE,
+           {"sw-resize", "bottom_left_corner"}},
+    [8] = {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_E_RESIZE,
+           {"e-resize", "right_side"}},
+    [9] = {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NE_RESIZE,
+           {"ne-resize", "top_right_corner"}},
+    [10] = {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_SE_RESIZE,
+            {"se-resize", "bottom_right_corner"}}};
+  if (edge >= countof(edges) || !edges[edge].names[0]) {
+    return;
+  }
+  if (WL.pointer && WL.pointer_serial) {
+    set_system(false, edges[edge]);
+  }
 }
 
 void civue__cursors_entered(void) {
-  if (C.set) civue__cursors_set(C.now);
+  if (C.set) {
+    civue__cursors_set(C.now);
+  }
 }

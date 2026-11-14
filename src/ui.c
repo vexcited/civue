@@ -26,15 +26,21 @@ void civue_input_free(civue_input *in) {
   vec_free(&in->text);
   vec_free(&in->preedit);
   vec_free(&in->trail);
-  vec_each(&in->drops, d) free(*d);
+  vec_each(&in->drops, d) {
+    free(*d);
+  }
   vec_free(&in->drops);
 }
 
 void civue_ui_free(civue_ui *ui) {
-  if (!ui) return;
+  if (!ui) {
+    return;
+  }
   CILO_MAP_EACH(e, &ui->memory) {
     Memory *m = (Memory *)e->val;
-    if (m->drop) m->drop(m->data);
+    if (m->drop) {
+      m->drop(m->data);
+    }
     own_free(m);
   }
   map_free(&ui->memory);
@@ -53,21 +59,27 @@ void civue_ui_free(civue_ui *ui) {
 static civue_id topmost(const civue_ui *ui, civue_vec2 m, bool overlay) {
   for (u32 i = ui->prev_regions.len; i-- > 0;) {
     const civue_region *r = &ui->prev_regions.v[i];
-    if (r->overlay == overlay && rect_contains(r->rect, m)) return r->id;
+    if (r->overlay == overlay && rect_contains(r->rect, m)) {
+      return r->id;
+    }
   }
   return 0;
 }
 
 civue_id civue_region_at(const civue_ui *ui, civue_vec2 p) {
-  for (u32 k = 0; k < 2; k++)
+  for (u32 k = 0; k < 2; k++) {
     for (u32 i = ui->regions.len; i-- > 0;) {
       const civue_region *r = &ui->regions.v[i];
-      if (r->overlay == !k && rect_contains(r->rect, p)) return r->id;
+      if (r->overlay == !k && rect_contains(r->rect, p)) {
+        return r->id;
+      }
     }
+  }
   return 0;
 }
 
-void civue_begin_frame(civue_ui *ui, civue_vec2 size, f32 scale, civue_input *input) {
+void civue_begin_frame(civue_ui *ui, civue_vec2 size, f32 scale,
+                       civue_input *input) {
   ui->size = size;
   ui->scale = scale;
   // the input moves in, what carries over goes back.
@@ -77,12 +89,16 @@ void civue_begin_frame(civue_ui *ui, civue_vec2 size, f32 scale, civue_input *in
   *input = old;
   input->keys.len = 0;
   input->commands.len = 0;
-  vec_each(&input->drops, d) free(*d);
+  vec_each(&input->drops, d) {
+    free(*d);
+  }
   input->drops.len = 0;
   input->text.len = 0;
   input->trail.len = 0;
   input->held.len = 0;
-  vec_each(&taken.held, k) vec_push(&input->held, *k);
+  vec_each(&taken.held, k) {
+    vec_push(&input->held, *k);
+  }
   input->preedit.len = 0;
   buf_put(&input->preedit, taken.preedit.v, taken.preedit.len);
   input->has_mouse = taken.has_mouse;
@@ -97,7 +113,9 @@ void civue_begin_frame(civue_ui *ui, civue_vec2 size, f32 scale, civue_input *in
   input->mods = taken.mods;
   input->pressure = taken.pressure;
 
-  ui->dark = ui->appearance == CIVUE_APPEARANCE_SYSTEM ? ui->system_dark : ui->appearance == CIVUE_APPEARANCE_DARK;
+  ui->dark = ui->appearance == CIVUE_APPEARANCE_SYSTEM
+               ? ui->system_dark
+               : ui->appearance == CIVUE_APPEARANCE_DARK;
   ui->now = now_s();
   civue_dl_clear(&ui->base);
   civue_dl_clear(&ui->overlay);
@@ -113,7 +131,9 @@ void civue_begin_frame(civue_ui *ui, civue_vec2 size, f32 scale, civue_input *in
   ui->focus_kept = false;
   ui->frames++;
   ui->has_ring_rect = false;
-  if (ui->ring_press) ui->ring_press--;
+  if (ui->ring_press) {
+    ui->ring_press--;
+  }
   typeof(ui->regions) swap = ui->prev_regions;
   ui->prev_regions = ui->regions;
   ui->regions = swap;
@@ -123,10 +143,14 @@ void civue_begin_frame(civue_ui *ui, civue_vec2 size, f32 scale, civue_input *in
   ui->hovered = 0;
   if (ui->input.has_mouse) {
     ui->hovered = topmost(ui, ui->input.mouse, true);
-    if (!ui->hovered) ui->hovered = topmost(ui, ui->input.mouse, false);
+    if (!ui->hovered) {
+      ui->hovered = topmost(ui, ui->input.mouse, false);
+    }
   }
   // a release is cleared after this frame, so widgets still see it.
-  if (!ui->input.released[0] && !ui->input.down[0]) ui->active = 0;
+  if (!ui->input.released[0] && !ui->input.down[0]) {
+    ui->active = 0;
+  }
 }
 
 const civue_draw_list *civue_frame_list(civue_ui *ui) {
@@ -138,32 +162,52 @@ const civue_draw_list *civue_frame_list(civue_ui *ui) {
 
 void civue_end_frame(civue_ui *ui) {
   // a press elsewhere, or the focused widget gone, ends the focus.
-  if (!ui->focus_alive || (ui->input.pressed[0] && ui->active != ui->focus && !ui->focus_kept)) ui->focus = 0;
-  if (ui->input.released[0]) ui->active = 0;
+  if (!ui->focus_alive ||
+      (ui->input.pressed[0] && ui->active != ui->focus && !ui->focus_kept)) {
+    ui->focus = 0;
+  }
+  if (ui->input.released[0]) {
+    ui->active = 0;
+  }
   // what an event changed may be drawn by widgets laid out before it was seen.
   const civue_input *in = &ui->input;
-  for (u32 i = 0; i < 3; i++)
-    if (in->pressed[i] || in->released[i]) ui->repaint = true;
-  if (in->keys.len || in->text.len || in->drops.len) ui->repaint = true;
+  for (u32 i = 0; i < 3; i++) {
+    if (in->pressed[i] || in->released[i]) {
+      ui->repaint = true;
+    }
+  }
+  if (in->keys.len || in->text.len || in->drops.len) {
+    ui->repaint = true;
+  }
   ui->had_mouse = ui->input.has_mouse;
   ui->last_mouse = ui->input.mouse;
   civue_text_end_frame(ui->text);
   // values not asked for this frame are forgotten.
   u32 k = 0;
-  vec_each(&ui->anims, a) if (a->used == ui->now) ui->anims.v[k++] = *a;
+  vec_each(&ui->anims, a) {
+    if (a->used == ui->now) {
+      ui->anims.v[k++] = *a;
+    }
+  }
   ui->anims.len = k;
 }
 
-void civue_request_repaint(civue_ui *ui) { ui->repaint = true; }
+void civue_request_repaint(civue_ui *ui) {
+  ui->repaint = true;
+}
 
 void civue_request_repaint_after(civue_ui *ui, f64 seconds) {
   f64 t = ui->now + seconds;
-  if (!ui->repaint_at || t < ui->repaint_at) ui->repaint_at = t;
+  if (!ui->repaint_at || t < ui->repaint_at) {
+    ui->repaint_at = t;
+  }
 }
 
 // ---- layers ----
 
-civue_draw_list *civue_list(civue_ui *ui) { return ui->on_overlay ? &ui->overlay : &ui->base; }
+civue_draw_list *civue_list(civue_ui *ui) {
+  return ui->on_overlay ? &ui->overlay : &ui->base;
+}
 
 bool civue_begin_overlay(civue_ui *ui) {
   bool was = ui->on_overlay;
@@ -171,16 +215,23 @@ bool civue_begin_overlay(civue_ui *ui) {
   return was;
 }
 
-void civue_end_overlay(civue_ui *ui, bool was) { ui->on_overlay = was; }
+void civue_end_overlay(civue_ui *ui, bool was) {
+  ui->on_overlay = was;
+}
 
 static civue_rect px(const civue_ui *ui, civue_rect r) {
   f64 s = ui->scale;
-  return rect(round(r.x0 * s), round(r.y0 * s), round(r.x1 * s), round(r.y1 * s));
+  return rect(round(r.x0 * s), round(r.y0 * s), round(r.x1 * s),
+              round(r.y1 * s));
 }
 
-void civue_push_clip(civue_ui *ui, civue_rect r) { civue_dl_push_clip(civue_list(ui), px(ui, r)); }
+void civue_push_clip(civue_ui *ui, civue_rect r) {
+  civue_dl_push_clip(civue_list(ui), px(ui, r));
+}
 
-void civue_pop_clip(civue_ui *ui) { civue_dl_pop_clip(civue_list(ui)); }
+void civue_pop_clip(civue_ui *ui) {
+  civue_dl_pop_clip(civue_list(ui));
+}
 
 civue_rect civue_clip_rect(civue_ui *ui) {
   civue_rect c = civue_dl_clip(civue_list(ui));
@@ -190,16 +241,25 @@ civue_rect civue_clip_rect(civue_ui *ui) {
 
 // ---- interaction ----
 
-bool civue_owns_pointer(civue_ui *ui, civue_id id) { return ui->active == id || (!ui->active && ui->hovered == id); }
+bool civue_owns_pointer(civue_ui *ui, civue_id id) {
+  return ui->active == id || (!ui->active && ui->hovered == id);
+}
 
 bool civue_drawn_last_frame(civue_ui *ui, civue_id id) {
-  vec_each(&ui->prev_regions, r) if (r->id == id) return true;
+  vec_each(&ui->prev_regions, r) {
+    if (r->id == id) {
+      return true;
+    }
+  }
   return false;
 }
 
-civue_response civue_interact(civue_ui *ui, civue_id id, civue_rect rect, civue_sense sense) {
+civue_response civue_interact(civue_ui *ui, civue_id id, civue_rect rect,
+                              civue_sense sense) {
   civue_rect visible = rect_intersect(rect, civue_clip_rect(ui));
-  if (!rect_empty(visible)) vec_push(&ui->regions, ((civue_region){id, visible, ui->on_overlay}));
+  if (!rect_empty(visible)) {
+    vec_push(&ui->regions, ((civue_region){id, visible, ui->on_overlay}));
+  }
   civue_response r = {.rect = rect};
   if (ui->ring == id) {
     ui->has_ring_rect = true;
@@ -210,22 +270,30 @@ civue_response civue_interact(civue_ui *ui, civue_id id, civue_rect rect, civue_
       return r;
     }
   }
-  bool over = ui->input.has_mouse && !rect_empty(visible) && rect_contains(visible, ui->input.mouse);
+  bool over = ui->input.has_mouse && !rect_empty(visible) &&
+              rect_contains(visible, ui->input.mouse);
   // a region new this frame can't be known topmost, its rect is trusted.
   bool known = civue_drawn_last_frame(ui, id);
-  r.hovered = over && (ui->hovered == id || !known) && (!ui->active || ui->active == id);
-  if (sense == CIVUE_SENSE_HOVER) return r;
+  r.hovered =
+    over && (ui->hovered == id || !known) && (!ui->active || ui->active == id);
+  if (sense == CIVUE_SENSE_HOVER) {
+    return r;
+  }
   if (r.hovered && ui->input.pressed[0]) {
     ui->active = id;
     ui->press_origin = ui->input.mouse;
     r.pressed = true;
     r.double_clicked = ui->input.clicks >= 2;
   }
-  if (r.hovered && ui->input.pressed[1]) r.right_clicked = true;
+  if (r.hovered && ui->input.pressed[1]) {
+    r.right_clicked = true;
+  }
   if (ui->active == id) {
     if (ui->input.down[0]) {
       r.dragging = true;
-      if (ui->input.has_mouse && ui->had_mouse) r.drag_delta = v2_sub(ui->input.mouse, ui->last_mouse);
+      if (ui->input.has_mouse && ui->had_mouse) {
+        r.drag_delta = v2_sub(ui->input.mouse, ui->last_mouse);
+      }
     }
     if (ui->input.released[0]) {
       r.released = true;
@@ -236,39 +304,64 @@ civue_response civue_interact(civue_ui *ui, civue_id id, civue_rect rect, civue_
 }
 
 bool civue_under_overlay(civue_ui *ui, civue_vec2 p) {
-  if (ui->on_overlay) return false;
-  vec_each(&ui->prev_regions, r) if (r->overlay && rect_contains(r->rect, p)) return true;
+  if (ui->on_overlay) {
+    return false;
+  }
+  vec_each(&ui->prev_regions, r) {
+    if (r->overlay && rect_contains(r->rect, p)) {
+      return true;
+    }
+  }
   return false;
 }
 
 bool civue_pointer_moved(civue_ui *ui) {
-  return ui->input.has_mouse != ui->had_mouse || ui->input.mouse.x != ui->last_mouse.x ||
+  return ui->input.has_mouse != ui->had_mouse ||
+         ui->input.mouse.x != ui->last_mouse.x ||
          ui->input.mouse.y != ui->last_mouse.y;
 }
 
-void civue_claim_focus(civue_ui *ui) { ui->focus_alive = true; }
+void civue_claim_focus(civue_ui *ui) {
+  ui->focus_alive = true;
+}
 
-void civue_keep_focus(civue_ui *ui) { ui->focus_kept = true; }
+void civue_keep_focus(civue_ui *ui) {
+  ui->focus_kept = true;
+}
 
 void civue_press_ring(civue_ui *ui) {
-  if (!ui->ring) return;
+  if (!ui->ring) {
+    return;
+  }
   ui->ring_press = 2;
   ui->repaint = true;
 }
 
 bool civue_key_pressed(civue_ui *ui, u32 key) {
-  vec_each(&ui->input.keys, k) if (k->key == key) return true;
+  vec_each(&ui->input.keys, k) {
+    if (k->key == key) {
+      return true;
+    }
+  }
   return false;
 }
 
 bool civue_key_held(civue_ui *ui, u32 key) {
-  vec_each(&ui->input.held, k) if (*k == key) return true;
+  vec_each(&ui->input.held, k) {
+    if (*k == key) {
+      return true;
+    }
+  }
   return false;
 }
 
 bool civue_shortcut(civue_ui *ui, u32 key, bool shift) {
-  vec_each(&ui->input.keys,
-           k) if (k->key == key && (k->mods & CIVUE_MOD_CMD) && !!(k->mods & CIVUE_MOD_SHIFT) == shift) return true;
+  vec_each(&ui->input.keys, k) {
+    if (k->key == key && (k->mods & CIVUE_MOD_CMD) &&
+        !!(k->mods & CIVUE_MOD_SHIFT) == shift) {
+      return true;
+    }
+  }
   return false;
 }
 
@@ -285,20 +378,30 @@ static f32 anim_at(const civue_anim *a, f64 now) {
   return a->from + (a->to - a->from) * settle(t);
 }
 
-static f32 animate(civue_ui *ui, civue_id id, bool has_from, f32 from, f32 target, f32 seconds) {
+static f32 animate(civue_ui *ui, civue_id id, bool has_from, f32 from,
+                   f32 target, f32 seconds) {
   f64 now = ui->now;
   civue_anim *a = nullptr;
-  vec_each(&ui->anims, x) if (x->id == id) a = x;
+  vec_each(&ui->anims, x) {
+    if (x->id == id) {
+      a = x;
+    }
+  }
   if (!a) {
     vec_push(&ui->anims,
-             ((civue_anim){id, has_from ? from : target, target, seconds, has_from ? now : now - seconds, now}));
+             ((civue_anim){id, has_from ? from : target, target, seconds,
+                           has_from ? now : now - seconds, now}));
     a = &vec_last(&ui->anims);
   }
   a->used = now;
   f32 current = anim_at(a, now);
-  if (a->to != target) *a = (civue_anim){id, current, target, seconds, now, now};
+  if (a->to != target) {
+    *a = (civue_anim){id, current, target, seconds, now, now};
+  }
   f32 v = anim_at(a, now);
-  if (now - a->start < a->duration) ui->repaint = true;
+  if (now - a->start < a->duration) {
+    ui->repaint = true;
+  }
   return v;
 }
 
@@ -306,13 +409,17 @@ f32 civue_animate(civue_ui *ui, civue_id id, f32 target, f32 seconds) {
   return animate(ui, id, false, 0, target, seconds);
 }
 
-f32 civue_animate_from(civue_ui *ui, civue_id id, f32 from, f32 target, f32 seconds) {
+f32 civue_animate_from(civue_ui *ui, civue_id id, f32 from, f32 target,
+                       f32 seconds) {
   return animate(ui, id, true, from, target, seconds);
 }
 
-void *civue_memory(civue_ui *ui, civue_id id, usize size, void (*drop)(void *)) {
+void *civue_memory(civue_ui *ui, civue_id id, usize size,
+                   void (*drop)(void *)) {
   u64 v;
-  if (map_get(&ui->memory, id, &v)) return ((Memory *)v)->data;
+  if (map_get(&ui->memory, id, &v)) {
+    return ((Memory *)v)->data;
+  }
   Memory *m = own_new(sizeof *m + size);
   m->drop = drop;
   map_put(&ui->memory, id, (u64)m);
@@ -321,9 +428,13 @@ void *civue_memory(civue_ui *ui, civue_id id, usize size, void (*drop)(void *)) 
 
 void civue_forget(civue_ui *ui, civue_id id) {
   u64 v;
-  if (!map_get(&ui->memory, id, &v)) return;
+  if (!map_get(&ui->memory, id, &v)) {
+    return;
+  }
   Memory *m = (Memory *)v;
-  if (m->drop) m->drop(m->data);
+  if (m->drop) {
+    m->drop(m->data);
+  }
   own_free(m);
   map_del(&ui->memory, id);
 }
@@ -337,54 +448,72 @@ f32 civue_cubic_bezier(f32 x1, f32 y1, f32 x2, f32 y2, f32 t) {
   f32 lo = 0, hi = 1;
   for (u32 i = 0; i < 24; ++i) {
     f32 mid = (lo + hi) / 2;
-    if (bezier_at(x1, x2, mid) < t)
+    if (bezier_at(x1, x2, mid) < t) {
       lo = mid;
-    else
+    }
+    else {
       hi = mid;
+    }
   }
   return bezier_at(y1, y2, (lo + hi) / 2);
 }
 
-f32 civue_ease(f32 t) { return civue_cubic_bezier(.25, .1, .25, 1, t); }
+f32 civue_ease(f32 t) {
+  return civue_cubic_bezier(.25, .1, .25, 1, t);
+}
 
 // ---- painting ----
 
-static void radii4(f32 r, f32 s, f32 out[4]) { out[0] = out[1] = out[2] = out[3] = r * s; }
+static void radii4(f32 r, f32 s, f32 out[4]) {
+  out[0] = out[1] = out[2] = out[3] = r * s;
+}
 
 void civue_fill(civue_ui *ui, civue_rect r, civue_color c, f32 radius) {
-  if (c.a <= 0) return;
+  if (c.a <= 0) {
+    return;
+  }
   f32 rr[4];
   radii4(radius, ui->scale, rr);
   civue_dl_rect(civue_list(ui), px(ui, r), rr, c, CIVUE_CLEAR, 0);
 }
 
-void civue_fill_corners(civue_ui *ui, civue_rect r, civue_color c, const f32 radii[4]) {
+void civue_fill_corners(civue_ui *ui, civue_rect r, civue_color c,
+                        const f32 radii[4]) {
   f32 rr[4];
-  for (u32 i = 0; i < 4; i++) rr[i] = radii[i] * ui->scale;
+  for (u32 i = 0; i < 4; i++) {
+    rr[i] = radii[i] * ui->scale;
+  }
   civue_dl_rect(civue_list(ui), px(ui, r), rr, c, CIVUE_CLEAR, 0);
 }
 
-void civue_stroke_corners(civue_ui *ui, civue_rect r, civue_color c, f32 width, const f32 radii[4]) {
+void civue_stroke_corners(civue_ui *ui, civue_rect r, civue_color c, f32 width,
+                          const f32 radii[4]) {
   f32 rr[4];
-  for (u32 i = 0; i < 4; i++) rr[i] = radii[i] * ui->scale;
+  for (u32 i = 0; i < 4; i++) {
+    rr[i] = radii[i] * ui->scale;
+  }
   f32 w = fmaxf(roundf(width * ui->scale), 1);
   civue_dl_rect(civue_list(ui), px(ui, r), rr, CIVUE_CLEAR, c, w);
 }
 
-void civue_stroke(civue_ui *ui, civue_rect r, civue_color c, f32 width, f32 radius) {
+void civue_stroke(civue_ui *ui, civue_rect r, civue_color c, f32 width,
+                  f32 radius) {
   civue_fill_stroke(ui, r, CIVUE_CLEAR, c, width, radius);
 }
 
-void civue_fill_stroke(civue_ui *ui, civue_rect r, civue_color fill, civue_color stroke, f32 width, f32 radius) {
+void civue_fill_stroke(civue_ui *ui, civue_rect r, civue_color fill,
+                       civue_color stroke, f32 width, f32 radius) {
   f32 rr[4];
   radii4(radius, ui->scale, rr);
   f32 w = fmaxf(roundf(width * ui->scale), 1);
   civue_dl_rect(civue_list(ui), px(ui, r), rr, fill, stroke, w);
 }
 
-void civue_shadow(civue_ui *ui, civue_rect r, f32 radius, f32 blur, civue_vec2 offset, civue_color c) {
+void civue_shadow(civue_ui *ui, civue_rect r, f32 radius, f32 blur,
+                  civue_vec2 offset, civue_color c) {
   f32 s = ui->scale;
-  civue_rect moved = rect(r.x0 + offset.x, r.y0 + offset.y, r.x1 + offset.x, r.y1 + offset.y);
+  civue_rect moved =
+    rect(r.x0 + offset.x, r.y0 + offset.y, r.x1 + offset.x, r.y1 + offset.y);
   civue_dl_shadow(civue_list(ui), px(ui, moved), radius * s, blur * s / 2, c);
 }
 
@@ -400,24 +529,30 @@ void civue_vline(civue_ui *ui, f64 x, f64 y0, f64 y1, civue_color c) {
   civue_dl_rect(civue_list(ui), r, (f32[4]){}, c, CIVUE_CLEAR, 0);
 }
 
-void civue_line(civue_ui *ui, civue_vec2 a, civue_vec2 b, f32 width, civue_color c) {
+void civue_line(civue_ui *ui, civue_vec2 a, civue_vec2 b, f32 width,
+                civue_color c) {
   f64 s = ui->scale;
-  civue_dl_line(civue_list(ui), v2_scale(a, s), v2_scale(b, s), fmaxf(width * s, 1), c, false);
+  civue_dl_line(civue_list(ui), v2_scale(a, s), v2_scale(b, s),
+                fmaxf(width * s, 1), c, false);
 }
 
-void civue_band(civue_ui *ui, civue_vec2 a, civue_vec2 b, f32 width, civue_color c) {
+void civue_band(civue_ui *ui, civue_vec2 a, civue_vec2 b, f32 width,
+                civue_color c) {
   f64 s = ui->scale;
-  civue_dl_line(civue_list(ui), v2_scale(a, s), v2_scale(b, s), fmaxf(width * s, 1), c, true);
+  civue_dl_line(civue_list(ui), v2_scale(a, s), v2_scale(b, s),
+                fmaxf(width * s, 1), c, true);
 }
 
-void civue_image(civue_ui *ui, civue_texture t, civue_rect r, const f32 uv[4], f32 opacity, f32 radius, bool nearest) {
+void civue_image(civue_ui *ui, civue_texture t, civue_rect r, const f32 uv[4],
+                 f32 opacity, f32 radius, bool nearest) {
   f64 s = ui->scale;
   // images at fractional positions keep them, the canvas moves smoothly.
   civue_rect p = rect(r.x0 * s, r.y0 * s, r.x1 * s, r.y1 * s);
   civue_dl_image(civue_list(ui), t, p, uv, opacity, radius * s, nearest);
 }
 
-void civue_image_px(civue_ui *ui, civue_texture t, civue_rect r, const f32 uv[4], bool nearest) {
+void civue_image_px(civue_ui *ui, civue_texture t, civue_rect r,
+                    const f32 uv[4], bool nearest) {
   civue_dl_image(civue_list(ui), t, r, uv, 1, 0, nearest);
 }
 
@@ -429,17 +564,21 @@ void civue_fade_out(civue_ui *ui, civue_rect r, civue_color color) {
 }
 
 void civue_icon_at(civue_ui *ui, civue_icon icon, civue_rect r, civue_color c) {
-  civue_icons_draw(ui->icons, civue_list(ui), civue_gfx_atlas(ui->gfx), icon, px(ui, r), c, false);
+  civue_icons_draw(ui->icons, civue_list(ui), civue_gfx_atlas(ui->gfx), icon,
+                   px(ui, r), c, false);
 }
 
-void civue_icon_mirrored(civue_ui *ui, civue_icon icon, civue_rect r, f32 size, civue_color c) {
+void civue_icon_mirrored(civue_ui *ui, civue_icon icon, civue_rect r, f32 size,
+                         civue_color c) {
   f32 w = size, h = size;
   civue_icon_natural_size(ui->icons, icon, &w, &h);
   f64 x = r.x0 + (rect_w(r) - w) / 2, y = r.y0 + (rect_h(r) - h) / 2;
-  civue_icons_draw(ui->icons, civue_list(ui), civue_gfx_atlas(ui->gfx), icon, px(ui, rect_xywh(x, y, w, h)), c, true);
+  civue_icons_draw(ui->icons, civue_list(ui), civue_gfx_atlas(ui->gfx), icon,
+                   px(ui, rect_xywh(x, y, w, h)), c, true);
 }
 
-void civue_icon_centered(civue_ui *ui, civue_icon icon, civue_rect r, f32 size, civue_color c) {
+void civue_icon_centered(civue_ui *ui, civue_icon icon, civue_rect r, f32 size,
+                         civue_color c) {
   f32 w = size, h = size;
   civue_icon_natural_size(ui->icons, icon, &w, &h);
   f64 x = r.x0 + (rect_w(r) - w) / 2, y = r.y0 + (rect_h(r) - h) / 2;
@@ -448,45 +587,56 @@ void civue_icon_centered(civue_ui *ui, civue_icon icon, civue_rect r, f32 size, 
 
 // ---- text ----
 
-const civue_text_block *civue_layout_n(civue_ui *ui, const char *s, usize n, civue_text_style style, f32 max_width) {
+const civue_text_block *civue_layout_n(civue_ui *ui, const char *s, usize n,
+                                       civue_text_style style, f32 max_width) {
   return civue_text_layout(ui->text, s, n, style, max_width, ui->scale);
 }
 
-const civue_text_block *civue_layout(civue_ui *ui, const char *s, civue_text_style style, f32 max_width) {
+const civue_text_block *civue_layout(civue_ui *ui, const char *s,
+                                     civue_text_style style, f32 max_width) {
   return civue_layout_n(ui, s, strlen(s), style, max_width);
 }
 
-void civue_draw_text(civue_ui *ui, const civue_text_block *b, civue_vec2 origin, civue_color c) {
-  civue_text_draw(ui->text, civue_list(ui), civue_gfx_atlas(ui->gfx), civue_gfx_color_atlas(ui->gfx), b, origin, c,
-                  nullptr, 0);
+void civue_draw_text(civue_ui *ui, const civue_text_block *b, civue_vec2 origin,
+                     civue_color c) {
+  civue_text_draw(ui->text, civue_list(ui), civue_gfx_atlas(ui->gfx),
+                  civue_gfx_color_atlas(ui->gfx), b, origin, c, nullptr, 0);
 }
 
-f32 civue_text(civue_ui *ui, const char *s, civue_text_style style, civue_vec2 origin, civue_color c) {
+f32 civue_text(civue_ui *ui, const char *s, civue_text_style style,
+               civue_vec2 origin, civue_color c) {
   const civue_text_block *b = civue_layout(ui, s, style, 0);
   civue_draw_text(ui, b, origin, c);
   return b->width;
 }
 
-const civue_text_block *civue_fit(civue_ui *ui, const char *s, civue_text_style style, f32 max) {
+const civue_text_block *civue_fit(civue_ui *ui, const char *s,
+                                  civue_text_style style, f32 max) {
   usize n = strlen(s);
   const civue_text_block *b = civue_layout_n(ui, s, n, style, 0);
-  if (b->width <= max + 0.5f || !n) return b;
+  if (b->width <= max + 0.5f || !n) {
+    return b;
+  }
   f32 dots = civue_layout(ui, "...", style, 0)->width;
   f32 room = max - dots;
   u32 cut = 0;
-  for (u32 i = b->ncarets; i-- > 0;)
+  for (u32 i = b->ncarets; i-- > 0;) {
     if (b->carets[i].x <= room) {
       cut = b->carets[i].byte;
       break;
     }
-  while (cut > 0 && s[cut - 1] == ' ') cut--;
+  }
+  while (cut > 0 && s[cut - 1] == ' ') {
+    cut--;
+  }
   char *short_s = xfmt("%.*s...", (int)cut, s);
   const civue_text_block *out = civue_layout(ui, short_s, style, 0);
   free(short_s);
   return out;
 }
 
-f32 civue_text_in(civue_ui *ui, const char *s, civue_text_style style, civue_rect r, civue_color c, civue_align align) {
+f32 civue_text_in(civue_ui *ui, const char *s, civue_text_style style,
+                  civue_rect r, civue_color c, civue_align align) {
   const civue_text_block *b = civue_fit(ui, s, style, (f32)rect_w(r));
   f64 x = align == CIVUE_ALIGN_START    ? r.x0
           : align == CIVUE_ALIGN_CENTER ? r.x0 + (rect_w(r) - b->width) / 2
@@ -497,7 +647,9 @@ f32 civue_text_in(civue_ui *ui, const char *s, civue_text_style style, civue_rec
 }
 
 #ifdef __APPLE__
-const char *civue_shortcut_label(const char *mac) { return mac; }
+const char *civue_shortcut_label(const char *mac) {
+  return mac;
+}
 #else
 // one combination of glyphs, like "⌥⌘B", written as windows and linux do,
 // the modifiers first in their order.
@@ -505,57 +657,86 @@ static void label_combo(civue_bytes *out, const char *s, usize n) {
   static const struct {
     u32 cp;
     const char *name;
-  } keys[] = {{0x232b, "Backspace"}, {0x2326, "Delete"},   {0x21a9, "Enter"}, {0x23ce, "Enter"},
-              {0x21b5, "Enter"},     {0x238b, "Esc"},      {0x21e5, "Tab"},   {0x2423, "Space"},
-              {0x21de, "PageUp"},    {0x21df, "PageDown"}, {0x2196, "Home"},  {0x2198, "End"}};
+  } keys[] = {{0x232b, "Backspace"}, {0x2326, "Delete"}, {0x21a9, "Enter"},
+              {0x23ce, "Enter"},     {0x21b5, "Enter"},  {0x238b, "Esc"},
+              {0x21e5, "Tab"},       {0x2423, "Space"},  {0x21de, "PageUp"},
+              {0x21df, "PageDown"},  {0x2196, "Home"},   {0x2198, "End"}};
+
   bool cmd = false, ctrl = false, alt = false, shift = false;
   usize i = 0;
   civue_bytes key = {};
   while (i < n) {
     usize at = i;
     u32 c = utf8_next(s, n, &i);
-    if (c == 0x2318)
+    if (c == 0x2318) {
       cmd = true;
-    else if (c == 0x2303)
+    }
+    else if (c == 0x2303) {
       ctrl = true;
-    else if (c == 0x2325)
+    }
+    else if (c == 0x2325) {
       alt = true;
-    else if (c == 0x21e7)
+    }
+    else if (c == 0x21e7) {
       shift = true;
+    }
     else {
       const char *name = nullptr;
-      for (u32 k = 0; k < countof(keys); k++)
-        if (keys[k].cp == c) name = keys[k].name;
-      if (name)
+      for (u32 k = 0; k < countof(keys); k++) {
+        if (keys[k].cp == c) {
+          name = keys[k].name;
+        }
+      }
+      if (name) {
         buf_puts(&key, name);
-      else
+      }
+      else {
         buf_put(&key, s + at, i - at);
+      }
     }
   }
   // control is the command key there, the super key the mac's control.
-  if (cmd) buf_puts(out, "Ctrl+");
-  if (ctrl) buf_puts(out, "Super+");
-  if (alt) buf_puts(out, "Alt+");
-  if (shift) buf_puts(out, "Shift+");
+  if (cmd) {
+    buf_puts(out, "Ctrl+");
+  }
+  if (ctrl) {
+    buf_puts(out, "Super+");
+  }
+  if (alt) {
+    buf_puts(out, "Alt+");
+  }
+  if (shift) {
+    buf_puts(out, "Shift+");
+  }
   // a modifier alone, like a hint to hold shift.
-  if (!key.len && out->len && out->v[out->len - 1] == '+') out->len--;
+  if (!key.len && out->len && out->v[out->len - 1] == '+') {
+    out->len--;
+  }
   buf_put(out, key.v, key.len);
   vec_free(&key);
 }
 
 const char *civue_shortcut_label(const char *mac) {
-  if (!mac) return nullptr;
+  if (!mac) {
+    return nullptr;
+  }
   static civue_map made;
   u64 key = hash_str(mac) | 1, value;
-  if (map_get(&made, key, &value)) return (const char *)(uintptr_t)value;
+  if (map_get(&made, key, &value)) {
+    return (const char *)(uintptr_t)value;
+  }
   civue_bytes out = {};
   usize n = strlen(mac), i = 0;
   // combinations apart by spaces, like "⌘K ⌘S", one at a time.
   while (i < n) {
     usize end = i;
-    while (end < n && mac[end] != ' ') end++;
+    while (end < n && mac[end] != ' ') {
+      end++;
+    }
     label_combo(&out, mac + i, end - i);
-    while (end < n && mac[end] == ' ') buf_putc(&out, mac[end++]);
+    while (end < n && mac[end] == ' ') {
+      buf_putc(&out, mac[end++]);
+    }
     i = end;
   }
   char *label = buf_take(&out);

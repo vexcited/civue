@@ -7,9 +7,12 @@
 extern "C" {
 #endif
 
-/* ========================================================================================================== */
-/* number fields: typed values and arithmetic, arrow steps, scrubbing the label, and stepper buttons.         */
-/* ========================================================================================================== */
+/* ==========================================================================================================
+ */
+/* number fields: typed values and arithmetic, arrow steps, scrubbing the label,
+ * and stepper buttons.         */
+/* ==========================================================================================================
+ */
 
 typedef enum : uint8_t {
   CIVUE_NUM_NONE,
@@ -32,21 +35,25 @@ typedef struct {
 // formats a value for a field into `out`.
 typedef void (*civue_num_format)(double v, char *out, size_t n);
 
-// how a number field looks: painted by `idle` while it isn't edited, a text field in `style` and `field` while it is.
+// how a number field looks: painted by `idle` while it isn't edited, a text
+// field in `style` and `field` while it is.
 typedef struct {
   void *ctx;
   // paints the field over `r`, its label over `label` and `shown` over `value`.
-  void (*idle)(civue_ui *ui, void *ctx, civue_rect r, civue_rect label, civue_rect value, const char *shown,
-               bool hovered);
+  void (*idle)(civue_ui *ui, void *ctx, civue_rect r, civue_rect label,
+               civue_rect value, const char *shown, bool hovered);
   civue_text_style style;
   civue_field_look field;
 } civue_num_look;
 
-// a design panel field holding a number, like figma's: click to type a value or arithmetic, arrows step it by 1 or
-// 10 with shift, dragging its label, the first `label_w` points, scrubs it. `shown` is what it shows, `mixed` when
-// the selection mixes values, `show` formats a value stepped to.
-civue_num_change civue_num_field(civue_ui *ui, civue_id id, civue_rect r, float label_w, double value, bool mixed,
-                                 const char *shown, civue_num_format show, const civue_num_look *look);
+// a design panel field holding a number, like figma's: click to type a value or
+// arithmetic, arrows step it by 1 or 10 with shift, dragging its label, the
+// first `label_w` points, scrubs it. `shown` is what it shows, `mixed` when the
+// selection mixes values, `show` formats a value stepped to.
+civue_num_change civue_num_field(civue_ui *ui, civue_id id, civue_rect r,
+                                 float label_w, double value, bool mixed,
+                                 const char *shown, civue_num_format show,
+                                 const civue_num_look *look);
 // the next number field takes = for a variable, answering it with
 // CIVUE_NUM_VARIABLE. the field takes the character out of what is typed.
 void civue_num_field_variable(civue_ui *ui);
@@ -58,6 +65,7 @@ char *civue_num_field_typed(civue_ui *ui, civue_id id);
 // the number a field's text says: a number, arithmetic, or arithmetic on the
 // current value when it starts with an operator, like "*2".
 bool civue_eval_num(const char *text, const double *current, double *out);
+
 typedef struct {
   civue_response up, down;
   // the value is at max, or at min, and that one doesn't step.
@@ -65,10 +73,13 @@ typedef struct {
   bool stepped;
   double value;
 } civue_steppers_state;
-// figma's stepper buttons, at `up` and `down`: a step, a big one with shift, the value rounded to the step and kept
-// in min to max. held, they step again after half a second, then every tenth.
-civue_steppers_state civue_steppers(civue_ui *ui, civue_id id, civue_rect up, civue_rect down, double value,
-                                    double step, double big, double min, double max);
+
+// figma's stepper buttons, at `up` and `down`: a step, a big one with shift,
+// the value rounded to the step and kept in min to max. held, they step again
+// after half a second, then every tenth.
+civue_steppers_state civue_steppers(civue_ui *ui, civue_id id, civue_rect up,
+                                    civue_rect down, double value, double step,
+                                    double big, double min, double max);
 // the usual display of a number: whole, or at most two decimals.
 void civue_num_show(double v, char *out, size_t n);
 

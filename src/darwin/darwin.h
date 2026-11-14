@@ -18,9 +18,19 @@
 #define msg7 CIVUE_MSG7
 #define NEW CIVUE_NEW
 #define AUTORELEASE CIVUE_AUTORELEASE
-static inline id retain(id o) { return civue_retain(o); }
-static inline void release(id o) { civue_release(o); }
-static inline id autorelease(id o) { return civue_autorelease(o); }
+
+static inline id retain(id o) {
+  return civue_retain(o);
+}
+
+static inline void release(id o) {
+  civue_release(o);
+}
+
+static inline id autorelease(id o) {
+  return civue_autorelease(o);
+}
+
 #define ns_str civue_ns_str
 #define ns_strn civue_ns_strn
 #define ns_cstr civue_ns_cstr
