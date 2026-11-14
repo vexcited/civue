@@ -39,16 +39,32 @@ struct civue_gfx {
   civue_texture next_id;
 };
 
-static id<MTLTexture> texture(id<MTLDevice> device, MTLPixelFormat format,
-                              u32 w, u32 h, MTLTextureUsage usage) {
+static id<MTLTexture> texture_stored(id<MTLDevice> device,
+                                     MTLPixelFormat format, u32 w, u32 h,
+                                     MTLTextureUsage usage,
+                                     MTLStorageMode storage) {
   MTLTextureDescriptor *d =
     [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format
                                                        width:MAX(w, 1u)
                                                       height:MAX(h, 1u)
                                                    mipmapped:NO];
   d.usage = usage;
-  d.storageMode = MTLStorageModePrivate;
+  d.storageMode = storage;
   return [device newTextureWithDescriptor:d];
+}
+
+static id<MTLTexture> texture(id<MTLDevice> device, MTLPixelFormat format,
+                              u32 w, u32 h, MTLTextureUsage usage) {
+  return texture_stored(device, format, w, h, usage, MTLStorageModePrivate);
+}
+
+// a texture the cpu writes its pixels into. the driver keeps about 90 mb
+// around for as long as blits are encoded, however small they are, so
+// uploads go through replaceRegion instead.
+static id<MTLTexture> written_texture(id<MTLDevice> device,
+                                      MTLPixelFormat format, u32 w, u32 h) {
+  return texture_stored(device, format, w, h, MTLTextureUsageShaderRead,
+                        MTLStorageModeShared);
 }
 
 static id<MTLSamplerState> sampler(id<MTLDevice> device,
@@ -84,8 +100,8 @@ civue_gfx *civue_gfx_new(void *device) {
   g->nearest = sampler(g->device, MTLSamplerMinMagFilterNearest);
   g->atlas.bytes_per_pixel = 1;
   g->color_atlas.bytes_per_pixel = 4;
-  g->atlas_texture = texture(g->device, MTLPixelFormatR8Unorm, CIVUE_ATLAS_SIZE,
-                             CIVUE_ATLAS_SIZE, MTLTextureUsageShaderRead);
+  g->atlas_texture = written_texture(g->device, MTLPixelFormatR8Unorm,
+                                     CIVUE_ATLAS_SIZE, CIVUE_ATLAS_SIZE);
   g->dummy = texture(g->device, MTLPixelFormatRGBA8Unorm, 1, 1,
                      MTLTextureUsageShaderRead);
   g->next_id = 1;
@@ -185,31 +201,14 @@ void civue_gfx_free_texture(civue_gfx *g, civue_texture tid) {
 
 civue_texture civue_gfx_upload_image(civue_gfx *g, u32 w, u32 h,
                                      const u8 *rgba) {
-  id<MTLTexture> t = texture(g->device, MTLPixelFormatRGBA8Unorm, w, h,
-                             MTLTextureUsageShaderRead);
-  NSUInteger row = (NSUInteger)w * 4, len = row * h;
+  id<MTLTexture> t =
+    written_texture(g->device, MTLPixelFormatRGBA8Unorm, w, h);
 
-  @autoreleasepool {
-    id<MTLBuffer> staging =
-      [g->device newBufferWithBytes:rgba
-                             length:len
-                            options:MTLResourceStorageModeShared];
-
-    if (staging) {
-      id<MTLCommandBuffer> cb = [g->queue commandBuffer];
-      id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
-      [blit copyFromBuffer:staging
-               sourceOffset:0
-          sourceBytesPerRow:row
-        sourceBytesPerImage:len
-                 sourceSize:MTLSizeMake(w, h, 1)
-                  toTexture:t
-           destinationSlice:0
-           destinationLevel:0
-          destinationOrigin:MTLOriginMake(0, 0, 0)];
-      [blit endEncoding];
-      [cb commit];
-    }
+  if (w && h) {
+    [t replaceRegion:MTLRegionMake2D(0, 0, w, h)
+         mipmapLevel:0
+           withBytes:rgba
+         bytesPerRow:(NSUInteger)w * 4];
   }
 
   return civue_gfx_register_texture(g, (__bridge void *)t);
@@ -243,55 +242,27 @@ static QuadBuffer *quad_buffer(civue_gfx *g, NSUInteger len) {
   return nullptr;
 }
 
-// the glyphs and icons new this frame, through one buffer and one encoder.
-static void upload_atlases(civue_gfx *g, id<MTLCommandBuffer> cb) {
+// the glyphs and icons new this frame.
+static void upload_atlases(civue_gfx *g) {
   civue_atlas *atlases[2] = {&g->atlas, &g->color_atlas};
   id<MTLTexture> textures[2] = {g->atlas_texture, g->color_atlas_texture};
-  NSUInteger total = 0;
-
-  for (u32 k = 0; k < 2; k++) {
-    vec_each(&atlases[k]->pending, p) {
-      NSUInteger len = (NSUInteger)p->w * p->h * atlases[k]->bytes_per_pixel;
-      total += (len + 15) & ~15ul;
-    }
-  }
-
-  id<MTLBuffer> staging =
-    total ? [g->device newBufferWithLength:total
-                                   options:MTLResourceStorageModeShared]
-          : nil;
-  id<MTLBlitCommandEncoder> blit = staging ? [cb blitCommandEncoder] : nil;
-  u8 *bytes = staging.contents;
-  NSUInteger at = 0;
 
   for (u32 k = 0; k < 2; k++) {
     civue_atlas *a = atlases[k];
 
     vec_each(&a->pending, p) {
-      NSUInteger row = (NSUInteger)p->w * a->bytes_per_pixel;
-      NSUInteger len = row * p->h;
-
-      if (blit) {
-        memcpy(bytes + at, p->data.v, len);
-        [blit copyFromBuffer:staging
-                 sourceOffset:at
-            sourceBytesPerRow:row
-          sourceBytesPerImage:len
-                   sourceSize:MTLSizeMake(p->w, p->h, 1)
-                    toTexture:textures[k]
-             destinationSlice:0
-             destinationLevel:0
-            destinationOrigin:MTLOriginMake(p->x, p->y, 0)];
+      if (p->w && p->h) {
+        [textures[k] replaceRegion:MTLRegionMake2D(p->x, p->y, p->w, p->h)
+                       mipmapLevel:0
+                         withBytes:p->data.v
+                       bytesPerRow:(NSUInteger)p->w * a->bytes_per_pixel];
       }
 
-      at += (len + 15) & ~15ul;
       vec_free(&p->data);
     }
 
     a->pending.len = 0;
   }
-
-  [blit endEncoding];
 }
 
 void civue_gfx_encode(civue_gfx *g, void *command_buffer, void *target_texture,
@@ -302,11 +273,11 @@ void civue_gfx_encode(civue_gfx *g, void *command_buffer, void *target_texture,
 
   if (g->color_atlas.pending.len && !g->color_atlas_texture) {
     g->color_atlas_texture =
-      texture(g->device, MTLPixelFormatRGBA8Unorm, CIVUE_ATLAS_SIZE,
-              CIVUE_ATLAS_SIZE, MTLTextureUsageShaderRead);
+      written_texture(g->device, MTLPixelFormatRGBA8Unorm, CIVUE_ATLAS_SIZE,
+                      CIVUE_ATLAS_SIZE);
   }
 
-  upload_atlases(g, cb);
+  upload_atlases(g);
 
   MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
   MTLRenderPassColorAttachmentDescriptor *att = rp.colorAttachments[0];
