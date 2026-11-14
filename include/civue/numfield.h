@@ -7,12 +7,10 @@
 extern "C" {
 #endif
 
-/* ==========================================================================================================
- */
-/* number fields: typed values and arithmetic, arrow steps, scrubbing the label,
- * and stepper buttons.         */
-/* ==========================================================================================================
- */
+/* ========================================================================== */
+/* number fields: typed values and arithmetic, arrow steps, scrubbing the     */
+/* label, and stepper buttons.                                                */
+/* ========================================================================== */
 
 typedef enum : uint8_t {
   CIVUE_NUM_NONE,

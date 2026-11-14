@@ -37,25 +37,25 @@ extern Wl civue__wl;
 #define WL civue__wl
 
 // whether this is the process's first thread.
-bool civue__main_thread(void);
+bool civue__main_thread();
 
 // files dragged over the window, and dropped on it. window.c.
 void civue__drag_moved(civue_vec2 at);
 void civue__dropped(civue_vec2 at, civue_strs *paths);
 
 // the data device's selection and drags, once the seat is known. clipboard.c.
-void civue__clipboard_seat(void);
+void civue__clipboard_seat();
 // the selection's bytes of a mime type, false when it holds none, and whether
 // it holds anything. from any thread.
 bool civue__clip_read(const char *mime, civue_bytes *out);
-bool civue__clip_any(void);
+bool civue__clip_any();
 
 // the app's cursor images and the scale they are made at, the window's display
 // scale. cursors.c.
 void civue__cursors_use(const civue_window_options *o);
 void civue__cursors_set_scale(f32 scale);
 // the pointer's or the stylus's cursor again, after either entered the window.
-void civue__cursors_entered(void);
+void civue__cursors_entered();
 // sets the cursor the app asks for, its image or the system's.
 void civue__cursors_set(civue_cursor c);
 // the system's resize cursor of an edge of the window, xdg shell's number.

@@ -70,7 +70,7 @@ char *civue__file_path(const char *url, usize n) {
   return out;
 }
 
-civue_strs civue_pasteboard_files(void) {
+civue_strs civue_pasteboard_files() {
   civue_strs out = {};
   // file managers copy a list of urls, gnome's with the operation first.
   civue_bytes list = {};
@@ -98,6 +98,6 @@ civue_strs civue_pasteboard_files(void) {
   return out;
 }
 
-bool civue_pasteboard_holds_other(void) {
+bool civue_pasteboard_holds_other() {
   return civue__clip_any();
 }

@@ -7,14 +7,11 @@
 extern "C" {
 #endif
 
-/* ==========================================================================================================
- */
-/* rich text as figma keeps annotation labels and component descriptions:
- * paragraphs, headers, code blocks    */
-/* and list items of runs bold, italic, struck, code or linked, laid out
- * wrapped.                             */
-/* ==========================================================================================================
- */
+/* ========================================================================== */
+/* rich text as figma keeps annotation labels and component descriptions:     */
+/* paragraphs, headers, code blocks and list items of runs bold, italic,      */
+/* struck, code or linked, laid out wrapped.                                  */
+/* ========================================================================== */
 
 // the format of a byte: its flags, and in the high bits which of the doc's
 // links it belongs to, none for 0.
@@ -102,16 +99,13 @@ float civue_rich_draw(civue_ui *ui, const civue_rich_doc *d, civue_vec2 origin,
                       civue_text_style style, float width,
                       civue_rich_colors colors);
 
-/* ==========================================================================================================
- */
-/* editing: the doc's own edits, its html, and an editor with bold and italic on
- * cmd+b and cmd+i, lists and   */
-/* markdown shortcuts as they are typed. */
-/* ==========================================================================================================
- */
+/* ========================================================================== */
+/* editing: the doc's own edits, its html, and an editor with bold and italic */
+/* on cmd+b and cmd+i, lists and markdown shortcuts as they are typed.        */
+/* ========================================================================== */
 
 // a doc of one empty paragraph.
-civue_rich_doc civue_rich_new(void);
+civue_rich_doc civue_rich_new();
 civue_rich_doc civue_rich_clone(const civue_rich_doc *d);
 // no text and no list.
 bool civue_rich_is_empty(const civue_rich_doc *d);

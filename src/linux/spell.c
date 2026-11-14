@@ -28,7 +28,7 @@ static void first_dict(const char *const lang_tag, const char *const name,
 }
 
 // the language of the environment, like "en_US", or any installed one.
-static char *default_language(void) {
+static char *default_language() {
   const char *env = getenv("LC_MESSAGES");
   if (!env || !*env) {
     env = getenv("LANG");
@@ -55,7 +55,7 @@ static char *default_language(void) {
 }
 
 // the checker, made on first use, its lock held. nullptr without one.
-static EnchantDict *dict(void) {
+static EnchantDict *dict() {
   if (!S.broker) {
     S.broker = enchant_broker_init();
     S.ctype = newlocale(LC_CTYPE_MASK, "C.UTF-8", (locale_t)0);
@@ -162,7 +162,7 @@ civue_strs civue_spell_guesses(const char *text, u32 a, u32 b) {
   return out;
 }
 
-char *civue_spell_language(void) {
+char *civue_spell_language() {
   pthread_mutex_lock(&S.lock);
   dict();
   char *code = xstrdup(S.language ? S.language : "en_US");

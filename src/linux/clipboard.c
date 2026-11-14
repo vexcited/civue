@@ -192,7 +192,7 @@ static const struct wl_data_device_listener device_listener = {
   .drop = device_drop,
   .selection = device_selection};
 
-void civue__clipboard_seat(void) {
+void civue__clipboard_seat() {
   if (D.device || !WL.data_manager || !WL.seat) {
     return;
   }
@@ -249,7 +249,7 @@ static void any_on_main(void *arg) {
   *(bool *)arg = D.source || (D.selection && D.selection->mimes.len);
 }
 
-bool civue__clip_any(void) {
+bool civue__clip_any() {
   bool any = false;
   civue_on_main(any_on_main, &any);
   return any;
@@ -272,11 +272,11 @@ static char *read_string(const char *const *mimes, u32 n) {
   return nullptr;
 }
 
-char *civue_clipboard_text(void) {
+char *civue_clipboard_text() {
   return read_string(TEXT_MIMES, countof(TEXT_MIMES));
 }
 
-char *civue_clipboard_html(void) {
+char *civue_clipboard_html() {
   static const char *mimes[] = {"text/html"};
   return read_string(mimes, 1);
 }
@@ -332,7 +332,7 @@ static void source_send(void *data, struct wl_data_source *s, const char *mime,
   pthread_attr_destroy(&attr);
 }
 
-static void own_clear(void) {
+static void own_clear() {
   free(D.text);
   free(D.html);
   D.text = D.html = nullptr;

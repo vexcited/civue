@@ -8,7 +8,7 @@
 #include <stdatomic.h>
 #include <unistd.h>
 
-static const char PORTAL[] = "org.freedesktop.portal.Desktop";
+static constexpr char PORTAL[] = "org.freedesktop.portal.Desktop";
 
 typedef struct {
   const char *const *extensions;

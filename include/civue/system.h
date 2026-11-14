@@ -7,16 +7,14 @@
 extern "C" {
 #endif
 
-/* ==========================================================================================================
- */
-/* the clipboard. what is read is malloc'd and the caller's. */
-/* ==========================================================================================================
- */
+/* ========================================================================== */
+/* the clipboard. what is read is malloc'd and the caller's.                  */
+/* ========================================================================== */
 
 // its text, nullptr when it holds none.
-char *civue_clipboard_text(void);
+char *civue_clipboard_text();
 // its html, nullptr when it holds none.
-char *civue_clipboard_html(void);
+char *civue_clipboard_html();
 void civue_clipboard_set_text(const char *s, size_t n);
 // html for apps that read it, with `text` for the others.
 void civue_clipboard_set_html(const char *html, const char *text);
@@ -34,15 +32,13 @@ typedef bool (*civue_image_convert)(const civue_bytes *in, civue_bytes *out,
 bool civue_pasteboard_image(civue_bytes *out, char **mime,
                             civue_image_convert convert);
 // the absolute paths of files copied in the file manager, the caller's.
-civue_strs civue_pasteboard_files(void);
+civue_strs civue_pasteboard_files();
 // whether the clipboard holds anything, of any kind.
-bool civue_pasteboard_holds_other(void);
+bool civue_pasteboard_holds_other();
 
-/* ==========================================================================================================
- */
-/* file panels and spell checking. */
-/* ==========================================================================================================
- */
+/* ========================================================================== */
+/* file panels and spell checking.                                            */
+/* ========================================================================== */
 
 // the system's panel picking files to open of the given extensions, or any when
 // `n` is 0, waited for with the window still drawn. absolute paths, the
@@ -55,7 +51,7 @@ civue_u32s civue_spell_misspelled(const char *text);
 // the checker's guesses for the word at code points a to b, the caller's.
 civue_strs civue_spell_guesses(const char *text, uint32_t a, uint32_t b);
 // the language checked, like "en_US", malloc'd.
-char *civue_spell_language(void);
+char *civue_spell_language();
 void civue_spell_set_language(const char *code);
 
 #ifdef __cplusplus

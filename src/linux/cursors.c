@@ -285,7 +285,7 @@ void civue__cursors_set_edge(u32 edge) {
   }
 }
 
-void civue__cursors_entered(void) {
+void civue__cursors_entered() {
   if (C.set) {
     civue__cursors_set(C.now);
   }

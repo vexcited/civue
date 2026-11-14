@@ -100,7 +100,7 @@ static bool has_extension(VkPhysicalDevice p, const char *name) {
   return found;
 }
 
-static bool make_instance(void) {
+static bool make_instance() {
   u32 n = 0;
   vkEnumerateInstanceExtensionProperties(nullptr, &n, nullptr);
   VkExtensionProperties *e = xcalloc(n ? n : 1, sizeof *e);
@@ -194,7 +194,7 @@ static i32 score(VkPhysicalDevice p, u32 *family) {
   }
 }
 
-static bool pick_device(void) {
+static bool pick_device() {
   u32 n = 0;
   vkEnumeratePhysicalDevices(V.vk.instance, &n, nullptr);
   VkPhysicalDevice *list = xcalloc(n ? n : 1, sizeof *list);
@@ -228,7 +228,7 @@ static bool stencil_attachment(VkFormat f) {
          VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
 }
 
-static bool make_device(void) {
+static bool make_device() {
   civue_vk_device *v = &V.vk;
   vkGetPhysicalDeviceMemoryProperties(v->physical, &v->memory);
   for (u32 i = 0; i < v->memory.memoryTypeCount; i++) {
@@ -237,9 +237,9 @@ static bool make_device(void) {
       v->lazy = true;
     }
   }
-  static const VkFormat stencils[] = {VK_FORMAT_S8_UINT,
-                                      VK_FORMAT_D24_UNORM_S8_UINT,
-                                      VK_FORMAT_D32_SFLOAT_S8_UINT};
+  static constexpr VkFormat stencils[] = {VK_FORMAT_S8_UINT,
+                                          VK_FORMAT_D24_UNORM_S8_UINT,
+                                          VK_FORMAT_D32_SFLOAT_S8_UINT};
   for (u32 i = 0; i < countof(stencils) && !v->stencil; i++) {
     if (stencil_attachment(stencils[i])) {
       v->stencil = stencils[i];
@@ -321,17 +321,17 @@ static bool make_device(void) {
   return true;
 }
 
-static void make(void) {
+static void make() {
   V.ok = make_instance() && pick_device() && make_device();
 }
 
-const civue_vk_device *civue_vk(void) {
+const civue_vk_device *civue_vk() {
   static pthread_once_t once = PTHREAD_ONCE_INIT;
   pthread_once(&once, make);
   return V.ok ? &V.vk : nullptr;
 }
 
-void *civue_gpu_device(void) {
+void *civue_gpu_device() {
   return (void *)civue_vk();
 }
 
@@ -615,7 +615,7 @@ void civue_vk_wait(u64 value) {
   civue_vk_collect();
 }
 
-void civue_vk_wait_all(void) {
+void civue_vk_wait_all() {
   for (u32 i = 0; i < V.nlanes; i++) {
     civue_vk_wait((u64)i << LANE_SHIFT | atomic_load(&V.lanes[i].submitted));
   }
@@ -631,7 +631,7 @@ void civue_vk_defer(void (*fn)(void *), void *arg) {
   pthread_mutex_unlock(&V.defer_lock);
 }
 
-void civue_vk_collect(void) {
+void civue_vk_collect() {
   u64 now[CIVUE_VK_LANES] = {};
   for (u32 i = 0; i < V.nlanes; i++) {
     now[i] = lane_now(i);

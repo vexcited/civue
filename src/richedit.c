@@ -6,7 +6,7 @@
 
 // ---- the doc ----
 
-civue_rich_doc civue_rich_new(void) {
+civue_rich_doc civue_rich_new() {
   civue_rich_doc d = {};
   vec_push(&d.blocks, CIVUE_RICH_PARA);
   return d;

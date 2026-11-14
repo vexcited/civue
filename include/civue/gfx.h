@@ -11,13 +11,10 @@
 extern "C" {
 #endif
 
-/* ==========================================================================================================
- */
-/* the renderer. draws draw lists on the gpu in one render pass of instanced
- * quads, its atlases and images    */
-/* uploaded on the way. */
-/* ==========================================================================================================
- */
+/* ========================================================================== */
+/* the renderer. draws draw lists on the gpu in one render pass of instanced  */
+/* quads, its atlases and images uploaded on the way.                         */
+/* ========================================================================== */
 
 typedef struct civue_gfx civue_gfx;
 

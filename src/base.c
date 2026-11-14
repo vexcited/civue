@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdckdint.h>
 #include <pwd.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -45,7 +46,7 @@ void civue__log(const char *fmt, ...) {
   va_end(ap);
 }
 
-double civue_now(void) {
+double civue_now() {
 #ifdef __APPLE__
   static mach_timebase_info_data_t tb;
   if (!tb.denom) {
@@ -59,11 +60,9 @@ double civue_now(void) {
 #endif
 }
 
-/* ==========================================================================================================
- */
-/* memory. */
-/* ==========================================================================================================
- */
+/* ========================================================================== */
+/* memory.                                                                    */
+/* ========================================================================== */
 
 void *civue__xmalloc(usize n) {
   void *p = malloc(n ? n : 1);
@@ -112,7 +111,11 @@ void civue__vec_grow(void **v, u32 *cap, u32 need, usize item) {
   while (n < need) {
     n = n < 0x40000000 ? n * 2 : need;
   }
-  *v = xrealloc(*v, (usize)n * item);
+  usize size;
+  if (ckd_mul(&size, (usize)n, item)) {
+    die("%u items of %zu bytes overflow", n, item);
+  }
+  *v = xrealloc(*v, size);
   *cap = n;
 }
 
@@ -141,15 +144,13 @@ char *civue__buf_take(civue_bytes *b) {
   vec_reserve(b, 1);
   b->v[b->len] = 0;
   char *s = (char *)b->v;
-  *b = (civue_bytes){0};
+  *b = (civue_bytes){};
   return s ? s : xstrdup("");
 }
 
-/* ==========================================================================================================
- */
-/* text. */
-/* ==========================================================================================================
- */
+/* ========================================================================== */
+/* text.                                                                      */
+/* ========================================================================== */
 
 uint32_t civue_utf8_next(const char *s, size_t n, size_t *i) {
   const u8 *p = (const u8 *)s;
@@ -211,11 +212,9 @@ size_t civue_utf8_put(char out[4], uint32_t cp) {
   return 4;
 }
 
-/* ==========================================================================================================
- */
-/* files. */
-/* ==========================================================================================================
- */
+/* ========================================================================== */
+/* files.                                                                     */
+/* ========================================================================== */
 
 bool civue__file_read(const char *path, civue_bytes *out) {
   int fd = open(path, O_RDONLY);
@@ -248,7 +247,7 @@ bool civue__file_read(const char *path, civue_bytes *out) {
   return true;
 }
 
-const char *civue__home_dir(void) {
+const char *civue__home_dir() {
   static const char *home;
   if (!home) {
     const char *h = getenv("HOME");

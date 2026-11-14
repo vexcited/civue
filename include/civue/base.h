@@ -3,7 +3,6 @@
 
 #include <math.h>
 #include <stdarg.h>
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -14,12 +13,10 @@
 extern "C" {
 #endif
 
-/* ==========================================================================================================
- */
-/* values. positions and sizes are logical points as doubles, colors straight
- * alpha floats from 0 to 1.       */
-/* ==========================================================================================================
- */
+/* ========================================================================== */
+/* values. positions and sizes are logical points as doubles, colors straight */
+/* alpha floats from 0 to 1.                                                  */
+/* ========================================================================== */
 
 // an app whose own types have the same members defines CIVUE_VEC2, CIVUE_RECT,
 // CIVUE_COLOR, CIVUE_BYTES, CIVUE_U32S or CIVUE_STRS as them before including
@@ -81,11 +78,9 @@ static constexpr civue_color CIVUE_BLACK = {0, 0, 0, 1};
 static constexpr civue_color CIVUE_WHITE = {1, 1, 1, 1};
 static constexpr civue_color CIVUE_CLEAR = {0, 0, 0, 0};
 
-/* ==========================================================================================================
- */
-/* geometry and colors. */
-/* ==========================================================================================================
- */
+/* ========================================================================== */
+/* geometry and colors.                                                       */
+/* ========================================================================== */
 
 static inline civue_vec2 civue_v2(double x, double y) {
   return (civue_vec2){x, y};
@@ -159,11 +154,9 @@ static inline civue_color civue_alpha(civue_color c, float a) {
   return (civue_color){c.r, c.g, c.b, c.a * a};
 }
 
-/* ==========================================================================================================
- */
-/* hashing, text and time. */
-/* ==========================================================================================================
- */
+/* ========================================================================== */
+/* hashing, text and time.                                                    */
+/* ========================================================================== */
 
 static inline uint64_t civue_hash_u64(uint64_t x) {
   x ^= x >> 33;
@@ -189,7 +182,7 @@ uint32_t civue_utf8_next(const char *s, size_t n, size_t *i);
 size_t civue_utf8_put(char out[4], uint32_t cp);
 
 // monotonic seconds, the clock frames and animations run on.
-double civue_now(void);
+double civue_now();
 
 // where civue's messages go, stderr when none is set.
 void civue_set_log(void (*log)(const char *message));
