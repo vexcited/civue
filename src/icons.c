@@ -12,6 +12,8 @@ typedef struct {
 typedef struct {
   f32 size[2];
   u8 known;
+  // the view box's width over its height, 0 until read.
+  f32 aspect;
 } Natural;
 
 struct civue_icons {
@@ -24,8 +26,20 @@ struct civue_icons {
   Natural *natural;
 };
 
-civue_icons *civue_icons_new(void) {
-  return own_new(sizeof(civue_icons));
+static const civue_icon_svg *preset_svgs;
+static u32 preset_count;
+
+void civue_icons_preset(const civue_icon_svg *svgs, uint32_t count) {
+  preset_svgs = svgs;
+  preset_count = count;
+}
+
+civue_icons *civue_icons_new() {
+  civue_icons *ic = own_new(sizeof(civue_icons));
+  if (preset_svgs) {
+    civue_icons_use(ic, preset_svgs, preset_count);
+  }
+  return ic;
 }
 
 void civue_icons_use(civue_icons *ic, const civue_icon_svg *svgs,
@@ -100,13 +114,41 @@ bool civue_icon_natural_size(civue_icons *ic, civue_icon icon, float *w,
   return nat->known & 4;
 }
 
-void civue_icons_draw(civue_icons *ic, civue_draw_list *d, civue_atlas *atlas,
+float civue_icon_aspect(civue_icons *ic, civue_icon icon) {
+  Natural *nat;
+  const civue_icon_svg *s = svg_of(ic, icon, &nat);
+  if (!s) {
+    return 1;
+  }
+  if (!nat->aspect) {
+    nat->aspect = 1;
+    const char *close = memchr(s->svg, '>', s->len);
+    usize n = close ? (usize)(close - s->svg) : 0;
+    const char *box = n ? memmem(s->svg, n, "viewBox=\"", 9) : nullptr;
+    if (box) {
+      char *end;
+      f32 v[4];
+      const char *at = box + 9;
+      for (u32 i = 0; i < 4; i++, at = end) {
+        v[i] = strtof(at, &end);
+      }
+      if (v[2] > 0 && v[3] > 0) {
+        nat->aspect = v[2] / v[3];
+      }
+    }
+  }
+  return nat->aspect;
+}
+
+void civue_icons_draw(civue_icons *ic, civue_draw_list *d,
+                      civue_atlas *mask_atlas, civue_atlas *color_atlas,
                       civue_icon icon, civue_rect r, civue_color c,
                       bool mirror) {
   const civue_icon_svg *s = svg_of(ic, icon, nullptr);
   if (!s) {
     return;
   }
+  civue_atlas *atlas = s->color ? color_atlas : mask_atlas;
   u32 w = (u32)fmax(round(rect_w(r)), 1), h = (u32)fmax(round(rect_h(r)), 1);
   u64 key = ((u64)icon << 40 | (u64)w << 20 | h) + 1;
   u64 at;
@@ -117,19 +159,24 @@ void civue_icons_draw(civue_icons *ic, civue_draw_list *d, civue_atlas *atlas,
       vec_free(&rgba);
       return;
     }
-    // the tint comes from the color, only coverage is kept.
-    u8 *mask = cilo_malloc((usize)w * h);
-    for (usize i = 0; i < (usize)w * h; i++) {
-      mask[i] = rgba.v[i * 4 + 3];
+    // the tint comes from the color, only coverage is kept, unless the icon
+    // has colors of its own.
+    u8 *mask = nullptr;
+    if (!s->color) {
+      mask = cilo_malloc((usize)w * h);
+      for (usize i = 0; i < (usize)w * h; i++) {
+        mask[i] = rgba.v[i * 4 + 3];
+      }
     }
-    vec_free(&rgba);
+    const u8 *pixels = mask ? mask : rgba.v;
     f32 uv[4];
-    bool ok = civue_atlas_insert(atlas, w, h, mask, uv);
+    bool ok = civue_atlas_insert(atlas, w, h, pixels, uv);
     if (!ok) {
       civue_atlas_clear(atlas);
-      ok = civue_atlas_insert(atlas, w, h, mask, uv);
+      ok = civue_atlas_insert(atlas, w, h, pixels, uv);
     }
     cilo_mfree(mask);
+    vec_free(&rgba);
     if (!ok) {
       return;
     }
@@ -147,5 +194,11 @@ void civue_icons_draw(civue_icons *ic, civue_draw_list *d, civue_atlas *atlas,
   if (mirror) {
     uv[0] = e->uv[2], uv[2] = e->uv[0];
   }
-  civue_dl_mask(d, rect_xywh(round(r.x0), round(r.y0), w, h), uv, c, 1);
+  civue_rect to = rect_xywh(round(r.x0), round(r.y0), w, h);
+  if (s->color) {
+    civue_dl_color_glyph(d, to, uv, c.a);
+  }
+  else {
+    civue_dl_mask(d, to, uv, c, 1);
+  }
 }
