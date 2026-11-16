@@ -1990,14 +1990,26 @@ static void frame() {
   }
   ui->system_dark = W.dark;
   ui->window_focused = W.activated;
+  // what a pass asks of the window is asked once, the passes after it begin
+  // without it and without the input that made it.
+  bool maximize = false, minimize = false, closing = false, repaint = false;
   for (u32 pass = 0; pass < 4; pass++) {
     civue_begin_frame(ui, v2(pw / scale, ph / scale), scale, &W.input);
     W.app_cb.frame(W.app_cb.ctx, ui);
-    if (civue_end_frame(ui)) {
+    bool settled = civue_end_frame(ui);
+    maximize |= ui->toggle_maximize;
+    minimize |= ui->minimize_window;
+    closing |= ui->close_window;
+    repaint |= ui->repaint;
+    if (settled) {
       break;
     }
   }
 
+  ui->toggle_maximize = maximize;
+  ui->minimize_window = minimize;
+  ui->close_window = closing;
+  ui->repaint = repaint;
   // a frame that never settled is shown as it is, the next one is new.
   ui->settled = true;
   // the mask uploads with a submission of its own, before the frame's.
@@ -2074,8 +2086,15 @@ static void frame() {
 // `ms`, -1 for as long as it takes, then handles what came.
 static void pump(i32 ms) {
   struct wl_display *d = WL.display;
+  bool came = false;
   while (wl_display_prepare_read(d) != 0) {
     wl_display_dispatch_pending(d);
+    came = true;
+  }
+  // what was just handled may have made a frame drawable, which the wait
+  // asked for before it would sleep through.
+  if (came && W.wanted && drawable()) {
+    ms = 0;
   }
   while (wl_display_flush(d) < 0 && errno == EAGAIN) {
     struct pollfd out = {wl_display_get_fd(d), POLLOUT, 0};

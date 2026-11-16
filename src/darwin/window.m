@@ -91,6 +91,8 @@ static struct {
   // the surface of the gpu's last frame while it is the one shown, to read
   // back when the cpu draws the next.
   IOSurfaceRef gpu_frame;
+  // left once the gpu has drawn it.
+  dispatch_group_t gpu_drawing;
   f64 frame_at;
   bool frame_watched;
   // when the frame being built began.
@@ -309,6 +311,8 @@ static void drop_gpu_frame() {
     CFRelease(W.gpu_frame);
     W.gpu_frame = nullptr;
   }
+
+  W.gpu_drawing = nil;
 }
 
 // frees the surfaces but the one shown, or that one too.
@@ -422,7 +426,8 @@ static IOSurfaceRef make_surface(u32 pw, u32 ph) {
 }
 
 // a surface to draw the next frame into: not the one shown, nor one the
-// window server may still be reading.
+// window server may still be reading, which gives its place to a new one
+// when there is no other.
 static int free_surface(u32 pw, u32 ph) {
   int empty = -1, busy = -1;
 
@@ -443,7 +448,8 @@ static int free_surface(u32 pw, u32 ph) {
   }
 
   if (empty < 0) {
-    return busy;
+    CFRelease(W.surfaces[busy].io);
+    empty = busy;
   }
 
   W.surfaces[empty].io = make_surface(pw, ph);
@@ -516,6 +522,8 @@ static void draw_on_cpu(Drawer by, const civue_draw_list *list,
   civue_damage drawn = {.all = true};
 
   if (by == OVER_GPU) {
+    // the gpu may still be drawing the frame read back.
+    dispatch_group_wait(W.gpu_drawing, DISPATCH_TIME_FOREVER);
     copy_whole(W.gpu_frame, io);
     drawn = changes;
   }
@@ -597,6 +605,12 @@ static void draw_on_gpu(const civue_draw_list *list, civue_color background,
                    list, &background);
   draw_strip(cb, list);
 
+  dispatch_group_t drawing = dispatch_group_create();
+  dispatch_group_enter(drawing);
+  [cb addCompletedHandler:^(id<MTLCommandBuffer>) {
+    dispatch_group_leave(drawing);
+  }];
+
   if (synced) {
     // shown with the transaction: the layer of the cpu's frames goes away
     // with it, and a resized frame comes with the window's new size.
@@ -621,6 +635,7 @@ static void draw_on_gpu(const civue_draw_list *list, civue_color background,
 
   if (io) {
     W.gpu_frame = (IOSurfaceRef)CFRetain(io);
+    W.gpu_drawing = drawing;
   }
 
   W.gpu_at = now_s();
@@ -693,15 +708,27 @@ static void frame() {
     ui->system_dark = system_dark();
     ui->window_focused = W.window.keyWindow;
 
+    // what a pass asks of the window is asked once, the passes after it
+    // begin without it and without the input that made it.
+    bool drag = false, maximize = false, repaint = false;
+
     for (u32 pass = 0; pass < 4; pass++) {
       civue_begin_frame(ui, v2(pw / scale, ph / scale), scale, &W.input);
       W.app_cb.frame(W.app_cb.ctx, ui);
 
-      if (civue_end_frame(ui)) {
+      bool settled = civue_end_frame(ui);
+      drag |= ui->drag_window;
+      maximize |= ui->toggle_maximize;
+      repaint |= ui->repaint;
+
+      if (settled) {
         break;
       }
     }
 
+    ui->drag_window = drag;
+    ui->toggle_maximize = maximize;
+    ui->repaint = repaint;
     // a frame that never settled is shown as it is, the next one is new.
     ui->settled = true;
 
@@ -1337,6 +1364,14 @@ static NSView *titlebar_row() {
 
 @end
 
+// matched to the display as the surfaces the cpu draws are: a layer without
+// a color space shows its values as the display's own.
+static void show_as_srgb(CAMetalLayer *layer) {
+  CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+  layer.colorspace = space;
+  CGColorSpaceRelease(space);
+}
+
 // the main view a title bar taller than the window, its top off the screen,
 // or back to the window's size.
 static void lift_view(bool lift) {
@@ -1406,6 +1441,7 @@ static void make_strip() {
   W.strip_layer = [CAMetalLayer layer];
   W.strip_layer.device = (__bridge id<MTLDevice>)civue_gfx_device(W.gfx);
   W.strip_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+  show_as_srgb(W.strip_layer);
   W.strip_layer.framebufferOnly = YES;
   W.strip_layer.opaque = NO;
 
@@ -1599,6 +1635,7 @@ void civue_window_run_sized(const civue_window_options *o,
     // blending happens on srgb encoded values like browsers do, and the
     // layer shows them as srgb.
     W.layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    show_as_srgb(W.layer);
     // the cpu reads the gpu's frames back.
     W.layer.framebufferOnly = NO;
     W.layer.opaque = YES;
