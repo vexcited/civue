@@ -19,8 +19,14 @@ if(CMAKE_SCRIPT_MODE_FILE)
   set(names ${extra})
   foreach(source ${sources})
     file(READ ${source} code)
-    string(REGEX REPLACE "/\\*([^*]|\\*+[^*/])*\\*+/" "" code "${code}")
-    string(REGEX REPLACE "//[^\n]*" "" code "${code}")
+    # literals and comments are read whole, whichever starts first: a comment
+    # goes and a literal stays, then is emptied, so that neither hides an
+    # icon nor names one.
+    set(text "\"([^\"\\\n]|\\\\.)*\"")
+    set(char "'([^'\\\n]|\\\\.)*'")
+    set(comment "/\\*([^*]|\\*+[^*/])*\\*+/|//[^\n]*")
+    string(REGEX REPLACE "(${text}|${char})|${comment}" "\\1" code "${code}")
+    string(REGEX REPLACE "${text}|${char}" "\"\"" code "${code}")
     string(REGEX MATCHALL
       "(^|[^A-Za-z0-9_])(icon|CIVUE_ICON)${space}\\(${space}${word}${space},${space}${word}"
       uses "${code}")
@@ -61,18 +67,25 @@ if(CMAKE_SCRIPT_MODE_FILE)
     else()
       set(cached ${cache}/${set}/${icon}.svg)
       if(NOT EXISTS ${cached})
-        file(DOWNLOAD ${api}/${set}/${icon}.svg ${cached}.part
-          STATUS status TIMEOUT 30)
-        list(GET status 0 code)
-        list(GET status 1 why)
-        if(NOT code EQUAL 0)
-          file(REMOVE ${cached}.part)
-          if(code EQUAL 22)
-            message(FATAL_ERROR "civue: iconify has no icon ${name}")
+        # one build at a time fetches into a set, another may have fetched
+        # this icon meanwhile.
+        file(MAKE_DIRECTORY ${cache}/${set})
+        file(LOCK ${cache}/${set} DIRECTORY)
+        if(NOT EXISTS ${cached})
+          file(DOWNLOAD ${api}/${set}/${icon}.svg ${cached}.part
+            STATUS status TIMEOUT 30 TLS_VERIFY ON)
+          list(GET status 0 code)
+          list(GET status 1 why)
+          if(NOT code EQUAL 0)
+            file(REMOVE ${cached}.part)
+            if(code EQUAL 22)
+              message(FATAL_ERROR "civue: iconify has no icon ${name}")
+            endif()
+            message(FATAL_ERROR "civue: fetching ${name} failed: ${why}")
           endif()
-          message(FATAL_ERROR "civue: fetching ${name} failed: ${why}")
+          file(RENAME ${cached}.part ${cached})
         endif()
-        file(RENAME ${cached}.part ${cached})
+        file(LOCK ${cache}/${set} DIRECTORY RELEASE)
       endif()
       file(READ ${cached} svg)
     endif()
@@ -93,10 +106,12 @@ if(CMAKE_SCRIPT_MODE_FILE)
     # an icon painted in currentColor alone is tinted, any other paint keeps
     # its own colors.
     set(color false)
-    string(REGEX MATCHALL "(fill|stroke|stop-color)[ \t]*[=:][ \t]*\"?[^\";>]*"
+    string(REGEX MATCHALL
+      "(fill|stroke|stop-color)[ \t]*[=:][ \t]*[\"']?[^\"';>]*"
       paints "${svg}")
     foreach(paint ${paints})
-      string(REGEX REPLACE "^[a-z-]+[ \t]*[=:][ \t]*\"?" "" value "${paint}")
+      string(REGEX REPLACE "^[a-z-]+[ \t]*[=:][ \t]*[\"']?" "" value
+        "${paint}")
       string(STRIP "${value}" value)
       string(TOLOWER "${value}" value)
       if(NOT value MATCHES "^(currentcolor|none|transparent|inherit)?$")
