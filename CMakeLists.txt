@@ -351,12 +351,13 @@ set(CIVUE_DARWIN_SOURCES
   src/darwin/clipboard.m src/darwin/cursors.m src/darwin/filepanel.m
   src/darwin/gfx.m src/darwin/gpu.m src/darwin/pasteboard.m
   src/darwin/spell.m src/darwin/svg.m src/darwin/text.c
-  src/darwin/window.m)
+  src/darwin/webview.m src/darwin/window.m)
 
 set(CIVUE_LINUX_SOURCES
   src/linux/clipboard.c src/linux/cursors.c src/linux/filepanel.c
   src/linux/gfx.c src/linux/pasteboard.c src/linux/spell.c
-  src/linux/svg.c src/linux/text.c src/linux/vk.c src/linux/window.c)
+  src/linux/svg.c src/linux/text.c src/linux/vk.c src/linux/webview.c
+  src/linux/window.c)
 
 if(APPLE)
   enable_language(OBJC)
@@ -371,7 +372,8 @@ if(APPLE)
     "-framework Foundation" "-framework AppKit" "-framework Metal"
     "-framework QuartzCore" "-framework CoreText" "-framework IOSurface"
     "-framework CoreGraphics"
-    "-framework CoreFoundation" "-framework UniformTypeIdentifiers" objc)
+    "-framework CoreFoundation" "-framework UniformTypeIdentifiers"
+    "-framework WebKit" objc)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_library(civue STATIC ${CIVUE_SOURCES} ${CIVUE_LINUX_SOURCES})
   target_compile_definitions(civue PRIVATE _GNU_SOURCE)
