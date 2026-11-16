@@ -1,19 +1,44 @@
 #include "recorder.h"
 
+#include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-static int env(const char *name, int fallback) {
+// a count from the environment, at least `least`, or the fallback when it is
+// not set. anything else ends the run before it measures.
+static int env(const char *name, int fallback, int least) {
   const char *v = getenv(name);
 
-  return v && *v ? atoi(v) : fallback;
+  if (!v || !*v) {
+    return fallback;
+  }
+
+  char *end;
+  errno = 0;
+  long n = strtol(v, &end, 10);
+
+  if (errno || *end || n < least || n > INT_MAX) {
+    fprintf(stderr, "bench: %s is \"%s\", a count of %d or more is needed\n",
+            name, v, least);
+    exit(2);
+  }
+
+  return (int)n;
 }
 
 Recorder recorder_new() {
   Recorder r = {
-    .warmup = env("BENCH_WARMUP", 120),
-    .frames = env("BENCH_FRAMES", 600),
+    .warmup = env("BENCH_WARMUP", 120, 0),
+    .frames = env("BENCH_FRAMES", 600, 1),
   };
+
+  // frames are counted in an int.
+  if (r.warmup > INT_MAX - r.frames) {
+    fprintf(stderr, "bench: %d frames after %d are too many to count\n",
+            r.frames, r.warmup);
+    exit(2);
+  }
 
   r.intervals = calloc((size_t)r.frames + 1, sizeof *r.intervals);
   r.last = r.started = civue_now();
