@@ -103,6 +103,12 @@ static struct {
   f64 slow_at, gpu_at;
 } W = {.window_dark = -1, .shown = -1};
 
+void (*civue__webviews_place)(u64 frame);
+
+NSView *civue__window_view() {
+  return W.view;
+}
+
 static void draw_now();
 static void start_link();
 
@@ -737,6 +743,11 @@ static void frame() {
     ui->repaint_at = repaint_at;
     // a frame that never settled is shown as it is, the next one is new.
     ui->settled = true;
+
+    // by the last pass alone, the one the window shows.
+    if (civue__webviews_place) {
+      civue__webviews_place(ui->frames);
+    }
 
     present(background, pw, ph);
 
