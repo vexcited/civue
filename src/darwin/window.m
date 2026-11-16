@@ -711,6 +711,7 @@ static void frame() {
     // what a pass asks of the window is asked once, the passes after it
     // begin without it and without the input that made it.
     bool drag = false, maximize = false, repaint = false;
+    f64 repaint_at = 0;
 
     for (u32 pass = 0; pass < 4; pass++) {
       civue_begin_frame(ui, v2(pw / scale, ph / scale), scale, &W.input);
@@ -721,6 +722,10 @@ static void frame() {
       maximize |= ui->toggle_maximize;
       repaint |= ui->repaint;
 
+      if (ui->repaint_at && (!repaint_at || ui->repaint_at < repaint_at)) {
+        repaint_at = ui->repaint_at;
+      }
+
       if (settled) {
         break;
       }
@@ -729,6 +734,7 @@ static void frame() {
     ui->drag_window = drag;
     ui->toggle_maximize = maximize;
     ui->repaint = repaint;
+    ui->repaint_at = repaint_at;
     // a frame that never settled is shown as it is, the next one is new.
     ui->settled = true;
 

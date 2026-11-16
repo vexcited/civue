@@ -1993,6 +1993,7 @@ static void frame() {
   // what a pass asks of the window is asked once, the passes after it begin
   // without it and without the input that made it.
   bool maximize = false, minimize = false, closing = false, repaint = false;
+  f64 repaint_at = 0;
   for (u32 pass = 0; pass < 4; pass++) {
     civue_begin_frame(ui, v2(pw / scale, ph / scale), scale, &W.input);
     W.app_cb.frame(W.app_cb.ctx, ui);
@@ -2001,6 +2002,9 @@ static void frame() {
     minimize |= ui->minimize_window;
     closing |= ui->close_window;
     repaint |= ui->repaint;
+    if (ui->repaint_at && (!repaint_at || ui->repaint_at < repaint_at)) {
+      repaint_at = ui->repaint_at;
+    }
     if (settled) {
       break;
     }
@@ -2010,6 +2014,7 @@ static void frame() {
   ui->minimize_window = minimize;
   ui->close_window = closing;
   ui->repaint = repaint;
+  ui->repaint_at = repaint_at;
   // a frame that never settled is shown as it is, the next one is new.
   ui->settled = true;
   // the mask uploads with a submission of its own, before the frame's.
