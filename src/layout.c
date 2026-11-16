@@ -1801,6 +1801,11 @@ static bool near(f32 a, f32 b) {
   return fabsf(a - b) <= SETTLED;
 }
 
+// a basis may be none on both sides.
+static bool near_basis(f32 a, f32 b) {
+  return isnan(a) || isnan(b) ? isnan(a) && isnan(b) : near(a, b);
+}
+
 static Memo *memo_find(civue_tree *t, civue_id id) {
   u64 at;
   return map_get(&t->memo_index, id, &at) ? &t->memos.v[at - 1] : nullptr;
@@ -1934,7 +1939,8 @@ static bool stands(civue_ui *ui, civue_tree *t, const Memo *m,
     const Placed *was = placed(t, base + i, n->id);
     if (was &&
         !(near(was->x, n->x) && near(was->y, n->y) && near(was->w, n->w) &&
-          near(was->h, n->h) && near(was->cw, n->cw) && near(was->ch, n->ch))) {
+          near(was->h, n->h) && near(was->cw, n->cw) && near(was->ch, n->ch) &&
+          near_basis(was->basis, n->basis))) {
       return false;
     }
   }
