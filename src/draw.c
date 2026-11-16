@@ -195,6 +195,45 @@ void civue_dl_mask(civue_draw_list *d, civue_rect r, const f32 uv[4],
   push(d, q, 0);
 }
 
+void civue_dl_masks(civue_draw_list *d, const civue_glyph_quad *quads,
+                    u32 count, civue_color color, f32 gamma) {
+  if (!count) {
+    return;
+  }
+
+  civue_rect c = civue_dl_clip(d);
+  civue_quad q = {.params = {0, CIVUE_QUAD_MASK, gamma}};
+  q.clip[0] = (f32)c.x0, q.clip[1] = (f32)c.y0;
+  q.clip[2] = (f32)c.x1, q.clip[3] = (f32)c.y1;
+  premul(color, q.color);
+  memcpy(q.turn, d->turn, sizeof q.turn);
+  bool all = d->keep_hidden || d->turn[0] != 0 || d->turn[1] != 0;
+
+  civue_batch *last = d->batches.len ? &vec_last(&d->batches) : nullptr;
+  bool begun = !last || last->multiply != d->multiply;
+  u32 start = d->quads.len;
+  vec_reserve(&d->quads, count);
+  civue_quad *out = d->quads.v + d->quads.len;
+
+  for (u32 i = 0; i < count; i++) {
+    const f32 *r = quads[i].rect;
+    // nothing visible outside the clip.
+    if (!all && (r[0] >= q.clip[2] || r[1] >= q.clip[3] ||
+                 r[0] + r[2] <= q.clip[0] || r[1] + r[3] <= q.clip[1])) {
+      continue;
+    }
+
+    memcpy(q.rect, r, sizeof q.rect);
+    memcpy(q.uv, quads[i].uv, sizeof q.uv);
+    *out++ = q;
+  }
+
+  d->quads.len = (u32)(out - d->quads.v);
+  if (begun && d->quads.len > start) {
+    vec_push(&d->batches, ((civue_batch){start, 0, d->multiply}));
+  }
+}
+
 void civue_dl_color_glyph(civue_draw_list *d, civue_rect r, const f32 uv[4],
                           f32 opacity) {
   civue_quad q = {.color = {opacity, opacity, opacity, opacity},

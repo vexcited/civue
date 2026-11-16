@@ -773,14 +773,18 @@ const civue_text_block *civue_text_layout(civue_text_system *t, const char *s,
 
 void civue_text_end_frame(civue_text_system *t) {
   t->frame++;
-  if (t->frame % 120) {
+  if (t->frame % 30) {
     return;
   }
+
+  // text wrapped to a width that keeps changing leaves a block a frame: past
+  // a few thousand, the ones a few frames old go.
+  u64 kept = t->layouts.len > 2048 ? 30 : 600;
   // blocks live until the end of the frame after they were last asked.
   u32 k = 0;
   map_clear(&t->layout_index);
   vec_each(&t->layouts, l) {
-    if (t->frame - l->used >= 600) {
+    if (t->frame - l->used >= kept) {
       free(l->text);
       block_free(l->block);
       continue;

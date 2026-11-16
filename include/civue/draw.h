@@ -44,6 +44,13 @@ typedef struct {
   float turn[4];
 } civue_quad;
 
+// where a glyph goes, x, y, width and height, and what of the atlas it
+// shows.
+typedef struct {
+  float rect[4];
+  float uv[4];
+} civue_glyph_quad;
+
 // an image the ui can draw, see civue_gfx_register_texture.
 typedef uint64_t civue_texture;
 
@@ -121,6 +128,9 @@ void civue_dl_line(civue_draw_list *d, civue_vec2 a, civue_vec2 b, float width,
 // coverage from the mask atlas at `uv`, tinted. a gamma under 1 thickens it.
 void civue_dl_mask(civue_draw_list *d, civue_rect r, const float uv[4],
                    civue_color color, float gamma);
+// civue_dl_mask for each of `count` glyphs tinted alike, in one go.
+void civue_dl_masks(civue_draw_list *d, const civue_glyph_quad *quads,
+                    uint32_t count, civue_color color, float gamma);
 // pixels from the color atlas, faded.
 void civue_dl_color_glyph(civue_draw_list *d, civue_rect r, const float uv[4],
                           float opacity);

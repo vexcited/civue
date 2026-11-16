@@ -106,6 +106,8 @@ typedef struct {
   uint32_t nlines;
   civue_text_line *lines;
   float scale;
+  // the text system's own, what it found of the glyphs to draw them again.
+  void *cache;
 } civue_text_block;
 
 typedef struct {
