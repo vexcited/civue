@@ -46,6 +46,9 @@ typedef struct {
   // where it was painted, relative to its parent, and the content scrolled.
   f32 ux, uy, uw, uh, ucw, uch;
   f32 x, y, w, h, cw, ch;
+  // how wide what holds it is, which its padding may be a fraction of: as
+  // it was painted and as solved.
+  f32 ubasis, basis;
   u8 ncache, next_cache;
   f32 keys[2][7];
   Size sizes[2];
@@ -58,7 +61,7 @@ typedef struct {
 
 typedef struct {
   civue_id id;
-  f32 x, y, w, h, cw, ch;
+  f32 x, y, w, h, cw, ch, basis;
 } Placed;
 
 typedef struct {
@@ -122,6 +125,8 @@ typedef struct {
   // it drew, in pixels.
   civue_vec2 origin;
   f32 clip[4], box[4];
+  // the atlases its glyphs and icons were in.
+  u64 generations[2];
 } Memo;
 
 // a memo being recorded.
@@ -132,6 +137,8 @@ typedef struct {
   bool overlay, multiply, kept_hidden, repaint, focus_alive, failed;
   f64 repaint_at;
   u32 scroll_areas, cuts, open;
+  // around its nodes, in pixels.
+  f32 box[4];
 } Take;
 
 struct civue_tree {
@@ -472,6 +479,16 @@ static void paint(civue_ui *ui, civue_tree *t, const civue_node_style *s,
 
 // whether any length of a node is a fraction of what holds it: one with
 // none is laid out the same in any containing block.
+static bool relative_padding(const civue_node_layout *l) {
+  for (u32 i = 0; i < 4; i++) {
+    if (l->padding[i].unit == CIVUE_UNIT_RELATIVE) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 static bool relative(const civue_node_layout *l) {
   const civue_length *sizes[] = {&l->w,     &l->h,     &l->min_w,
                                  &l->min_h, &l->max_w, &l->max_h,
@@ -538,6 +555,18 @@ static void link(civue_tree *t, Open *parent, u32 i) {
   t->last_root = i;
 }
 
+static void grow(f32 box[4], f32 x0, f32 y0, f32 x1, f32 y1) {
+  box[0] = fminf(box[0], x0), box[1] = fminf(box[1], y0);
+  box[2] = fmaxf(box[2], x1), box[3] = fmaxf(box[3], y1);
+}
+
+// the memos being recorded reach over these pixels.
+static void taken_over(civue_tree *t, f32 x0, f32 y0, f32 x1, f32 y1) {
+  vec_each(&t->takes, k) {
+    grow(k->box, x0, y0, x1, y1);
+  }
+}
+
 static u32 add(civue_ui *ui, civue_tree *t, const civue_node_style *s,
                bool is_text, Open *o) {
   Open *parent = parent_of(ui, t);
@@ -549,12 +578,14 @@ static u32 add(civue_ui *ui, civue_tree *t, const civue_node_style *s,
 
   n->id = s->key ? s->key : next_id(t, parent);
   n->relative = relative(&n->l);
+  n->ubasis = NONE;
   link(t, parent, i);
 
   const Placed *was = placed(t, i, n->id);
   if (was) {
     n->ux = was->x, n->uy = was->y, n->uw = was->w, n->uh = was->h;
     n->ucw = was->cw, n->uch = was->ch;
+    n->ubasis = was->basis;
   }
   else if (t->has_hint) {
     n->ux = t->hint[0], n->uy = t->hint[1];
@@ -568,6 +599,9 @@ static u32 add(civue_ui *ui, civue_tree *t, const civue_node_style *s,
   *o = (Open){.node = i, .overlay = ui->on_overlay, .quiet = n->quiet};
   o->rect = rect_xywh(at.x + n->ux, at.y + n->uy, n->uw, n->uh);
   o->origin = v2(o->rect.x0, o->rect.y0);
+  f32 k = ui->scale;
+  taken_over(t, (f32)o->rect.x0 * k, (f32)o->rect.y0 * k, (f32)o->rect.x1 * k,
+             (f32)o->rect.y1 * k);
   inherit(ui, t, o, parent, s);
   paint(ui, t, s, o->rect, o);
   return i;
@@ -676,7 +710,7 @@ void civue_node_text_n(civue_ui *ui, const char *s, usize len,
   buf_put(&t->text, s, len);
   buf_putc(&t->text, 0);
 
-  Edges pad = edges(t, n->l.padding, NONE);
+  Edges pad = edges(t, n->l.padding, n->ubasis);
   civue_rect box = inset(inset(o.rect, border_of(&n->l)), pad);
   f32 w = (f32)rect_w(box);
   const char *str = (const char *)t->text.v + n->text_at;
@@ -715,7 +749,7 @@ void civue_node_icon(civue_ui *ui, civue_icon icon,
     l->h = civue_px(o.ts.size);
   }
 
-  Edges pad = edges(t, l->padding, NONE);
+  Edges pad = edges(t, l->padding, t->nodes.v[i].ubasis);
   civue_rect box = inset(inset(o.rect, border_of(l)), pad);
   if (!rect_empty(box)) {
     civue_icon_at(ui, icon, box, o.color);
@@ -730,7 +764,7 @@ civue_rect civue_node_content(civue_ui *ui) {
   civue_tree *t = tree(ui);
   const Open *o = top(t);
   const Node *n = &t->nodes.v[o->node];
-  Edges pad = edges(t, n->l.padding, (f32)rect_w(o->rect));
+  Edges pad = edges(t, n->l.padding, n->ubasis);
   return inset(inset(o->rect, border_of(&n->l)), pad);
 }
 
@@ -1517,7 +1551,7 @@ static Size layout_grid(civue_ui *ui, civue_tree *t, u32 i, const Box *b) {
       }
       Size z = compute(ui, t, it.node, cw, resolve(t, cs->h, NONE), cw,
                        INFINITY, cell, NONE, 0);
-      t->items.v[k].cross = cw;
+      t->items.v[k].cross = z.w;
       t->items.v[k].main = z.h;
       t->items.v[k].base = isnan(z.base) ? z.h : z.base;
 
@@ -1635,7 +1669,8 @@ static Size layout_grid(civue_ui *ui, civue_tree *t, u32 i, const Box *b) {
 static void finish(civue_ui *ui, civue_tree *t, u32 i, const Box *b, Size z) {
   f32 pw = z.w - b->bor.l - b->bor.r, ph = z.h - b->bor.t - b->bor.b;
   f32 x0 = b->bor.l + b->pad.l, y0 = b->bor.t + b->pad.t;
-  f32 right = z.w - b->bor.r, bottom = z.h - b->bor.b;
+  // how far the children reach, their margins with them.
+  f32 right = 0, bottom = 0;
 
   for (u32 c = t->nodes.v[i].first; c != NIL; c = t->nodes.v[c].next) {
     const Node *cn = &t->nodes.v[c];
@@ -1649,8 +1684,10 @@ static void finish(civue_ui *ui, civue_tree *t, u32 i, const Box *b, Size z) {
   }
 
   Node *n = &t->nodes.v[i];
-  n->cw = right - b->bor.l + b->pad.r;
-  n->ch = bottom - b->bor.t + b->pad.b;
+  // the padding after the content is scrolled to, and takes no room of its
+  // own in a view the content fits in.
+  n->cw = fmaxf(pw, right - b->bor.l + b->pad.r);
+  n->ch = fmaxf(ph, bottom - b->bor.t + b->pad.b);
   bool scrolls = b->s->overflow_x == CIVUE_OVERFLOW_SCROLL ||
                  b->s->overflow_y == CIVUE_OVERFLOW_SCROLL;
   if (scrolls && !n->quiet &&
@@ -1709,6 +1746,17 @@ static Size compute(civue_ui *ui, civue_tree *t, u32 i, f32 kw, f32 kh, f32 aw,
   Size out;
   if (!(flags & PERFORM) && cached(n, key, &out)) {
     return out;
+  }
+
+  // padding painted as a fraction of another width is painted again.
+  if (flags & PERFORM) {
+    n->basis = cbw;
+
+    bool same =
+      isnan(cbw) ? isnan(n->ubasis) : fabsf(cbw - n->ubasis) <= SETTLED;
+    if (!same && !n->quiet && relative_padding(s)) {
+      t->dirty = true;
+    }
   }
 
   // what a memo put back is where its frame left it when asked the same.
@@ -1912,6 +1960,7 @@ static void put_back(civue_ui *ui, civue_tree *t, const Memo *m, Open *parent,
     n->text_at = n->text_at - m->text_start + text;
     n->ux = n->x, n->uy = n->y, n->uw = n->w, n->uh = n->h;
     n->ucw = n->cw, n->uch = n->ch;
+    n->ubasis = n->basis;
     n->quiet = quiet;
     n->kept = true;
     // the blocks of the frame it was recorded in may be gone.
@@ -1927,6 +1976,7 @@ static void put_back(civue_ui *ui, civue_tree *t, const Memo *m, Open *parent,
   }
 
   civue_dl_replay(civue_list(ui), m->quads.v, m->quads.len, dx, dy, m->clip);
+  taken_over(t, m->box[0] + dx, m->box[1] + dy, m->box[2] + dx, m->box[3] + dy);
 
   civue_vec2 by = v2(dx / ui->scale, dy / ui->scale);
   civue_rect seen = civue_clip_rect(ui);
@@ -1948,8 +1998,14 @@ civue_memo_scope civue_memo_begin(civue_ui *ui, civue_id id, u64 inputs) {
   Memo *m = memo_of(t, id);
   m->used = ui->frames;
 
+  // an atlas that started over has what it drew somewhere else.
+  u64 generations[2];
+  civue__generations(ui, generations);
+
   f32 dx = 0, dy = 0;
   if (m->valid && m->inputs == inputs && m->around == a &&
+      m->generations[0] == generations[0] &&
+      m->generations[1] == generations[1] &&
       stands(ui, t, m, parent, &dx, &dy)) {
     put_back(ui, t, m, parent, dx, dy);
     return (civue_memo_scope){.ui = ui};
@@ -1958,6 +2014,7 @@ civue_memo_scope civue_memo_begin(civue_ui *ui, civue_id id, u64 inputs) {
   m->valid = false;
   m->inputs = inputs;
   m->around = a;
+  m->generations[0] = generations[0], m->generations[1] = generations[1];
   m->origin = parent ? parent->origin : v2(0, 0);
 
   civue_draw_list *d = civue_list(ui);
@@ -1984,6 +2041,7 @@ civue_memo_scope civue_memo_begin(civue_ui *ui, civue_id id, u64 inputs) {
     .scroll_areas = ui->scroll_areas,
     .cuts = d->cuts,
     .open = t->open.len,
+    .box = {INFINITY, INFINITY, -INFINITY, -INFINITY},
   };
   vec_push(&t->takes, take);
   d->keep_hidden = true;
@@ -2020,9 +2078,11 @@ static bool lasting(const civue_ui *ui, const civue_tree *t, const Take *k,
     }
   }
 
+  // an image may have gone to a batch that had its texture already.
   for (u32 i = k->quad; i < d->quads.len; i++) {
-    const f32 *turn = d->quads.v[i].turn;
-    if (turn[0] != 0 || turn[1] != 0) {
+    const civue_quad *q = &d->quads.v[i];
+    if (q->turn[0] != 0 || q->turn[1] != 0 ||
+        (u32)q->params[1] == CIVUE_QUAD_IMAGE) {
       return false;
     }
   }
@@ -2052,13 +2112,18 @@ void civue_memo_end(civue_memo_scope *s) {
   m->regions.len = 0;
   vec_extend(&m->regions, ui->regions.v + k.region, ui->regions.len - k.region);
 
-  m->box[0] = m->box[1] = INFINITY;
-  m->box[2] = m->box[3] = -INFINITY;
+  // what the pointer builds it again over: its nodes, which a hover lights
+  // without drawing anything before, what it drew and what takes the pointer.
+  memcpy(m->box, k.box, sizeof m->box);
   vec_each(&m->quads, q) {
-    m->box[0] = fminf(m->box[0], q->rect[0]);
-    m->box[1] = fminf(m->box[1], q->rect[1]);
-    m->box[2] = fmaxf(m->box[2], q->rect[0] + q->rect[2]);
-    m->box[3] = fmaxf(m->box[3], q->rect[1] + q->rect[3]);
+    grow(m->box, q->rect[0], q->rect[1], q->rect[0] + q->rect[2],
+         q->rect[1] + q->rect[3]);
+  }
+
+  f32 scale = ui->scale;
+  vec_each(&m->regions, r) {
+    grow(m->box, (f32)r->rect.x0 * scale, (f32)r->rect.y0 * scale,
+         (f32)r->rect.x1 * scale, (f32)r->rect.y1 * scale);
   }
 
   k.node_end = t->nodes.len;
@@ -2125,7 +2190,7 @@ bool civue__tree_end(civue_ui *ui) {
   vec_reserve(&t->prev, t->nodes.len);
   vec_each(&t->nodes, n) {
     t->prev.v[t->prev.len++] =
-      (Placed){n->id, n->x, n->y, n->w, n->h, n->cw, n->ch};
+      (Placed){n->id, n->x, n->y, n->w, n->h, n->cw, n->ch, n->basis};
   }
 
   t->indexed = false;

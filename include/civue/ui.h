@@ -228,6 +228,8 @@ struct civue_ui {
   civue_draw_list last;
   civue_color last_clear;
   uint32_t last_width, last_height;
+  // the atlases it was drawn from.
+  uint64_t last_generations[2];
   bool has_last;
   // what took the pointer this frame and the last.
   CIVUE_VEC(civue_region) regions, prev_regions;

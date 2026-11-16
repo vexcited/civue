@@ -175,10 +175,25 @@ const civue_draw_list *civue_frame_list(civue_ui *ui) {
   return &ui->combined;
 }
 
+void civue__generations(const civue_ui *ui, u64 out[2]) {
+  out[0] = ui->gfx ? civue_gfx_atlas(ui->gfx)->generation : 0;
+  out[1] = ui->gfx ? civue_gfx_color_atlas(ui->gfx)->generation : 0;
+}
+
 const civue_draw_list *civue_frame_changes(civue_ui *ui, civue_color clear,
                                            u32 width, u32 height,
                                            civue_damage *damage) {
   civue_draw_list *list = &ui->base;
+
+  // an atlas that started over shows other glyphs where the last frame's
+  // were: quads alike may not draw alike.
+  u64 generations[2];
+  civue__generations(ui, generations);
+
+  if (memcmp(generations, ui->last_generations, sizeof generations)) {
+    civue_frame_forget(ui);
+    memcpy(ui->last_generations, generations, sizeof generations);
+  }
 
   if (ui->overlay.quads.len) {
     civue_dl_clear(&ui->combined);

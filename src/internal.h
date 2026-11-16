@@ -174,6 +174,9 @@ static inline void map_clear(civue_map *m) {
 typedef struct civue_ui civue_ui;
 typedef struct civue_tree civue_tree;
 
+// how many times the coverage and the color atlases started over.
+void civue__generations(const civue_ui *ui, u64 out[2]);
+
 // the nodes' solve as a frame ends, true when nothing moved.
 bool civue__tree_end(civue_ui *ui);
 void civue__tree_free(civue_tree *t);
