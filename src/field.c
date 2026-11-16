@@ -16,6 +16,8 @@ typedef struct {
   f32 goal;
   // where the caret was drawn last, its line's height.
   civue_rect caret_rect;
+  // the caret was moved from outside, the next frame scrolls to it.
+  bool follow;
 } Field;
 
 static void drop_field(void *p) {
@@ -379,6 +381,7 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
   if (fresh || !focused_before) {
     f->anchor = 0;
     f->caret = f->text.len;
+    f->follow = true;
   }
   Edit e = {};
   const civue_text_block *b =
@@ -460,18 +463,21 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
     f32 top = b->nlines ? b->lines[cl].top : 0, lh = line_height(b),
         view = (f32)rect_h(r);
     f32 y = civue_scroll_y(ui, sid);
+    // the wheel alone leaves the caret out of view.
+    bool moved = e.touched || f->follow;
     if (e.touched && resp.dragging) {
       civue_scroll_to(ui, sid, top, top + lh + 8, view);
       civue_request_repaint(ui);
     }
-    else if (e.touched && top < y) {
+    else if (moved && top < y) {
       civue_set_scroll_y(ui, sid, top);
     }
-    else if (e.touched && top + lh + 8 > y + view) {
+    else if (moved && top + lh + 8 > y + view) {
       civue_set_scroll_y(ui, sid, top + lh + 8 - view);
     }
     origin.y = civue_scroll_area(ui, sid, r, b->height + 8).y0 + 4;
   }
+  f->follow = false;
   if (multiline || b->width <= w - 2) {
     f->scroll = 0;
   }
@@ -568,6 +574,7 @@ char *civue_field_insert(civue_ui *ui, civue_id id, const char *text) {
     return nullptr;
   }
   replace(f, text, strlen(text));
+  f->follow = true;
   return xstrndup((const char *)f->text.v, f->text.len);
 }
 
@@ -602,6 +609,7 @@ char *civue_field_replace(civue_ui *ui, civue_id id, uint32_t from, uint32_t to,
   f->caret = to;
   replace(f, text, strlen(text));
   f->blink = ui->now;
+  f->follow = true;
   return xstrndup((const char *)f->text.v, f->text.len);
 }
 
@@ -614,5 +622,6 @@ bool civue_field_caret_to_end(civue_ui *ui, civue_id id) {
     return false;
   }
   f->caret = f->anchor = f->text.len;
+  f->follow = true;
   return true;
 }
