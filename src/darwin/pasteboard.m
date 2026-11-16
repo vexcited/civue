@@ -44,6 +44,10 @@ bool civue_pasteboard_image(civue_bytes *out, char **mime,
       if (convert(&raw, out, &converted)) {
         *mime = xstrdup(converted);
       }
+      else {
+        // what a failed conversion left is no image.
+        vec_free(out);
+      }
 
       vec_free(&raw);
     }
