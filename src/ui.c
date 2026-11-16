@@ -55,6 +55,7 @@ void civue_ui_free(civue_ui *ui) {
   civue_dl_free(&ui->base);
   civue_dl_free(&ui->overlay);
   civue_dl_free(&ui->combined);
+  civue_dl_free(&ui->last);
   vec_free(&ui->regions);
   vec_free(&ui->prev_regions);
   vec_free(&ui->anims);
@@ -163,10 +164,56 @@ void civue_begin_frame(civue_ui *ui, civue_vec2 size, f32 scale,
 }
 
 const civue_draw_list *civue_frame_list(civue_ui *ui) {
+  // most frames draw nothing over the rest.
+  if (!ui->overlay.quads.len) {
+    return &ui->base;
+  }
+
   civue_dl_clear(&ui->combined);
   civue_dl_append(&ui->combined, &ui->base);
   civue_dl_append(&ui->combined, &ui->overlay);
   return &ui->combined;
+}
+
+const civue_draw_list *civue_frame_changes(civue_ui *ui, civue_color clear,
+                                           u32 width, u32 height,
+                                           civue_damage *damage) {
+  civue_draw_list *list = &ui->base;
+
+  if (ui->overlay.quads.len) {
+    civue_dl_clear(&ui->combined);
+    civue_dl_append(&ui->combined, &ui->base);
+    civue_dl_append(&ui->combined, &ui->overlay);
+    list = &ui->combined;
+  }
+
+  bool comparable = ui->has_last && ui->last_width == width &&
+                    ui->last_height == height &&
+                    !memcmp(&ui->last_clear, &clear, sizeof clear);
+
+  if (comparable) {
+    civue_damage_between(&ui->last, list, width, height, damage);
+  }
+  else {
+    *damage = (civue_damage){.all = true};
+  }
+
+  // the frame's quads are kept as they are, the list takes the last
+  // frame's room for the next one.
+  typeof(list->quads) quads = ui->last.quads;
+  typeof(list->batches) batches = ui->last.batches;
+  ui->last.quads = list->quads, ui->last.batches = list->batches;
+  list->quads = quads, list->batches = batches;
+  list->quads.len = 0, list->batches.len = 0;
+
+  ui->last_clear = clear;
+  ui->last_width = width, ui->last_height = height;
+  ui->has_last = true;
+  return &ui->last;
+}
+
+void civue_frame_forget(civue_ui *ui) {
+  ui->has_last = false;
 }
 
 bool civue_end_frame(civue_ui *ui) {

@@ -3,6 +3,7 @@
 
 #include <civue/gfx.h>
 #include <civue/icons.h>
+#include <civue/raster.h>
 #include <civue/text.h>
 
 #ifdef __cplusplus
@@ -223,6 +224,11 @@ struct civue_ui {
   bool settled;
   // the scroll areas begun this frame.
   uint32_t scroll_areas;
+  // what the last frame shown drew, over which color and at which size.
+  civue_draw_list last;
+  civue_color last_clear;
+  uint32_t last_width, last_height;
+  bool has_last;
   // what took the pointer this frame and the last.
   CIVUE_VEC(civue_region) regions, prev_regions;
   civue_id hovered, active;
@@ -294,6 +300,14 @@ void civue_begin_frame(civue_ui *ui, civue_vec2 size, float scale,
 bool civue_end_frame(civue_ui *ui);
 // both draw lists of the frame as one.
 const civue_draw_list *civue_frame_list(civue_ui *ui);
+// the frame's list, and what it changes of the one the last call returned for
+// the same `clear`, `width` and `height` in pixels: nothing for a frame the
+// window shows already, that needs no drawing. the list is kept until the
+// next call. civue_frame_forget makes the next one change everything.
+const civue_draw_list *civue_frame_changes(civue_ui *ui, civue_color clear,
+                                           uint32_t width, uint32_t height,
+                                           civue_damage *damage);
+void civue_frame_forget(civue_ui *ui);
 void civue_input_free(civue_input *in);
 
 // what took the pointer at `p` in the last frame, topmost first, from

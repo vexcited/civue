@@ -169,6 +169,11 @@ typedef struct {
   CIVUE_VEC(civue_atlas_upload) pending;
   // bumped when cleared, so cached entries know they are gone.
   uint64_t generation;
+  // the atlas keeps its pixels for <civue/raster.h>, CIVUE_ATLAS_SIZE a
+  // side, and uploads carry no copy of theirs. past a few uploads waiting
+  // the atlas is `stale` instead: all of it is to upload.
+  bool keeps, stale;
+  uint8_t *pixels;
 } civue_atlas;
 
 // room for a w by h bitmap, its uv returned, false when full. `data` is copied.

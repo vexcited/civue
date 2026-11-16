@@ -322,8 +322,32 @@ bool civue_atlas_insert(civue_atlas *a, u32 w, u32 h, const u8 *data,
   u32 x = best->x, y = best->y;
   best->x += pw;
   civue_atlas_upload up = {x, y, w, h};
-  buf_put(&up.data, data, (usize)w * h * a->bytes_per_pixel);
-  vec_push(&a->pending, up);
+  usize bpp = a->bytes_per_pixel;
+
+  if (a->keeps) {
+    // pages never written to take no memory.
+    if (!a->pixels) {
+      a->pixels = xcalloc((usize)CIVUE_ATLAS_SIZE * CIVUE_ATLAS_SIZE, bpp);
+    }
+
+    for (u32 row = 0; row < h; row++) {
+      memcpy(a->pixels + ((usize)(y + row) * CIVUE_ATLAS_SIZE + x) * bpp,
+             data + (usize)row * w * bpp, w * bpp);
+    }
+
+    // frames drawn on the cpu upload nothing, their glyphs add up.
+    if (a->pending.len >= 64) {
+      a->stale = true;
+      a->pending.len = 0;
+    }
+  }
+  else {
+    buf_put(&up.data, data, (usize)w * h * bpp);
+  }
+
+  if (!a->stale) {
+    vec_push(&a->pending, up);
+  }
   f32 s = CIVUE_ATLAS_SIZE;
   uv[0] = x / s, uv[1] = y / s, uv[2] = (x + w) / s, uv[3] = (y + h) / s;
   return true;
@@ -343,4 +367,6 @@ void civue_atlas_free(civue_atlas *a) {
   civue_atlas_clear(a);
   vec_free(&a->shelves);
   vec_free(&a->pending);
+  free(a->pixels);
+  a->pixels = nullptr;
 }
