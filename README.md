@@ -76,6 +76,7 @@ gpui's style names aren't macros of their own: `div` and `text` paste each of th
 | `widgets.h`, `field.h`, `numfield.h`, `rich.h` | headless controls, text fields, number fields, rich text editing |
 | `layout.h` | nodes laid out like css blocks, flexbox and grid, painted like gpui's divs |
 | `window.h` | the app, the window and the main loop, the keyboard and input methods, cursors, menus |
+| `webview.h` | a web page of the system's shown over a rect of the frame, messages to and from it, macOS only for now |
 | `system.h` | the clipboard and what other apps copy, file panels, spell checking |
 
 The modules stack in that order and each only uses the ones above it. An app that draws its own way can stop at
@@ -213,6 +214,21 @@ civue_icons(app ICONS mdi:home COLLECTIONS app=${CMAKE_CURRENT_SOURCE_DIR}/icons
 - **Cursors.** System cursors by kind, and the app's own images by kind and angle through
   `civue_window_options.cursor_image`, made once at each scale.
 
+## Web views
+
+- **A page over a rect.** `civue_webview_new` makes a web view of the system's, a `WKWebView` on macOS, and `civue_webview_show(ui, w, r)` shows it over `r` for the frame, as a widget is called: a frame that does not call it hides it, and the keys go back to the window when the page had them. The app paints what is around it, a card or a spinner, and with `transparent` the ui shows through where the page paints nothing.
+- **Messages.** A page calls `window.civue.postMessage(text)`, the same on every platform, and the app's `message` gets the text on the main thread. `civue_webview_eval` runs javascript in the page for the other way. Only the page's main frame is heard, not the frames it embeds.
+- **Its own origin.** `civue_webview_load_html` takes the origin the page believes it is on, which is what a captcha or a login widget checks, and cookies are kept between runs as a browser keeps them.
+- **Links leave.** A link to a new window, or one the user clicks to another site, opens in the system's browser.
+
+```c
+static void message(void *ctx, const char *text) { civue_window_wake(); }     // on the main thread
+
+civue_webview *web = civue_webview_new(&(civue_webview_options){.message = message, .transparent = true});
+civue_webview_load_html(web, "<button onclick=\"civue.postMessage('hi')\">Hi</button>", "https://example.com");
+civue_webview_show(ui, web, civue_rect_xywh(24, 24, 400, 600));                // each frame it is wanted
+```
+
 ## Memory
 
 civue allocates what it keeps to itself through [cilo](../ciko-cilo): the ui, the text system and its layouts, the
@@ -257,6 +273,7 @@ target_link_libraries(app PRIVATE civue::civue)
 ## Limits
 
 - One window per process for now, and Wayland only on Linux.
+- Web views are macOS only for now: `civue_webview_new` answers null on Linux and the rest does nothing with it. One is a view of the system's over the frame, so nothing civue draws goes over it, menus and tooltips included, and a transparent one asks `WKWebView` not to paint its background through a key that is not public.
 - Linux draws every frame it builds on the gpu, the ones the window shows already included.
 - On macOS a frame whose changes hold an image is drawn by the gpu, as are the frames of a window in full screen with its own title bar, and the driver's 120 MB come with them until two and a half seconds after the last.
 - `CTFontShapeGlyphs` is private to Core Text and found by name at run time, so a store review may refuse an app for it.
