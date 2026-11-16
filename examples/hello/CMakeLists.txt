@@ -15,7 +15,13 @@ if(NOT TARGET civue::civue)
   FetchContent_MakeAvailable(civue)
 endif()
 
-add_executable(hello src/main.c)
+add_executable(hello
+  src/main.c
+  src/look.c
+  src/components/add_button.c
+  src/components/dark_switch.c
+  src/components/volume_slider.c
+  src/components/name_field.c)
 target_link_libraries(hello PRIVATE civue::civue)
 target_compile_options(hello PRIVATE -Wall -Wextra)
 

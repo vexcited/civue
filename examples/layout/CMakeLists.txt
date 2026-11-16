@@ -15,7 +15,13 @@ if(NOT TARGET civue::civue)
   FetchContent_MakeAvailable(civue)
 endif()
 
-add_executable(layout src/main.c)
+add_executable(layout
+  src/main.c
+  src/look.c
+  src/scrollbars.c
+  src/components/header.c
+  src/components/grid_card.c
+  src/components/list_card.c)
 target_link_libraries(layout PRIVATE civue::civue)
 target_compile_options(layout PRIVATE -Wall -Wextra)
 
