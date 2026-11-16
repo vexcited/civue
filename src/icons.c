@@ -129,10 +129,18 @@ float civue_icon_aspect(civue_icons *ic, civue_icon icon) {
       char *end;
       f32 v[4];
       const char *at = box + 9;
-      for (u32 i = 0; i < 4; i++, at = end) {
+      bool ok = true;
+      for (u32 i = 0; i < 4 && ok; i++, at = end) {
+        // commas part them as well as spaces.
+        while (*at == ',' || *at == ' ' || *at == '\t' || *at == '\n' ||
+               *at == '\r') {
+          at++;
+        }
+
         v[i] = strtof(at, &end);
+        ok = end != at;
       }
-      if (v[2] > 0 && v[3] > 0) {
+      if (ok && v[2] > 0 && v[3] > 0) {
         nat->aspect = v[2] / v[3];
       }
     }
