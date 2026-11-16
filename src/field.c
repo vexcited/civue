@@ -463,8 +463,9 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
     f32 top = b->nlines ? b->lines[cl].top : 0, lh = line_height(b),
         view = (f32)rect_h(r);
     f32 y = civue_scroll_y(ui, sid);
-    // the wheel alone leaves the caret out of view.
-    bool moved = e.touched || f->follow;
+    // the wheel alone leaves the caret out of view, but not what is being
+    // composed.
+    bool moved = e.touched || f->follow || in->preedit.len;
     if (e.touched && resp.dragging) {
       civue_scroll_to(ui, sid, top, top + lh + 8, view);
       civue_request_repaint(ui);
