@@ -20,13 +20,28 @@ if(CMAKE_SCRIPT_MODE_FILE)
   foreach(source ${sources})
     file(READ ${source} code)
     # literals and comments are read whole, whichever starts first: a comment
-    # goes and a literal stays, then is emptied, so that neither hides an
-    # icon nor names one.
+    # goes and a literal is emptied, so that neither hides an icon nor names
+    # one.
     set(text "\"([^\"\\\n]|\\\\.)*\"")
     set(char "'([^'\\\n]|\\\\.)*'")
     set(comment "/\\*([^*]|\\*+[^*/])*\\*+/|//[^\n]*")
-    string(REGEX REPLACE "(${text}|${char})|${comment}" "\\1" code "${code}")
-    string(REGEX REPLACE "${text}|${char}" "\"\"" code "${code}")
+    set(rest "${code}")
+    set(code "")
+    while(rest MATCHES "${text}|${char}|${comment}")
+      set(found "${CMAKE_MATCH_0}")
+      string(FIND "${rest}" "${found}" at)
+      string(LENGTH "${found}" length)
+      string(SUBSTRING "${rest}" 0 ${at} before)
+      math(EXPR after "${at} + ${length}")
+      string(SUBSTRING "${rest}" ${after} -1 rest)
+      string(APPEND code "${before}")
+      if(found MATCHES "^/")
+        string(APPEND code " ")
+      else()
+        string(APPEND code "\"\"")
+      endif()
+    endwhile()
+    string(APPEND code "${rest}")
     string(REGEX MATCHALL
       "(^|[^A-Za-z0-9_])(icon|CIVUE_ICON)${space}\\(${space}${word}${space},${space}${word}"
       uses "${code}")
