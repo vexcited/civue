@@ -70,12 +70,23 @@ typedef struct {
   // what is pushed multiplies what is under it, like a highlighter.
   bool multiply;
   float turn[4];
+  // quads the clip hides are kept, for what is recorded to be drawn again
+  // somewhere else.
+  bool keep_hidden;
+  // clips pushed that the one before them cut.
+  uint32_t cuts;
 } civue_draw_list;
 
 void civue_dl_clear(civue_draw_list *d);
 void civue_dl_free(civue_draw_list *d);
 // adds what `other` draws after what this one does.
 void civue_dl_append(civue_draw_list *d, const civue_draw_list *other);
+// draws `count` recorded quads again, moved by `dx` and `dy` pixels. a quad
+// that `was`, the clip when it was recorded, clipped takes the clip of now,
+// any other keeps its own, moved and cut by it. none may be an image or
+// turned.
+void civue_dl_replay(civue_draw_list *d, const civue_quad *quads,
+                     uint32_t count, float dx, float dy, const float was[4]);
 // restricts what follows to `r` until civue_dl_pop_clip.
 void civue_dl_push_clip(civue_draw_list *d, civue_rect r);
 void civue_dl_pop_clip(civue_draw_list *d);

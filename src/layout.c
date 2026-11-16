@@ -36,12 +36,24 @@ typedef struct {
   u32 text_at, text_len;
   civue_text_style ts;
   bool is_text, nowrap, truncate;
+  // a length of its own is a fraction of what holds it.
+  bool relative;
+  // its text laid out on one line, and wrapped to `wrap_width`, this frame.
+  const civue_text_block *whole, *wrapped;
+  f32 wrap_width;
+  // out of view, where it settles without the frame running again.
+  bool quiet;
   // where it was painted, relative to its parent, and the content scrolled.
   f32 ux, uy, uw, uh, ucw, uch;
   f32 x, y, w, h, cw, ch;
   u8 ncache, next_cache;
   f32 keys[2][7];
   Size sizes[2];
+  // how it was last laid out, and whether that still stands: a node a memo
+  // put back is not laid out again when asked the same.
+  bool solved, kept;
+  f32 solved_key[7];
+  Size solved_size;
 } Node;
 
 typedef struct {
@@ -59,7 +71,7 @@ typedef struct {
   f32 lh_rel;
   civue_color color;
   civue_text_align align;
-  bool nowrap, truncate, clip, scroll, overlay;
+  bool nowrap, truncate, clip, scroll, overlay, quiet;
 } Open;
 
 typedef struct {
@@ -91,6 +103,37 @@ typedef struct {
   u32 flags;
 } Box;
 
+// what a memo's block built, as its frame solved it.
+typedef struct {
+  civue_id id;
+  u64 inputs, around;
+  // the frame that last asked for it.
+  u64 used;
+  bool valid;
+  // an inner clip was cut by the one around: it only goes back where it was.
+  bool exact;
+  // the first of its nodes and of their text when recorded.
+  u32 start, text_start;
+  Vec(Node) nodes;
+  civue_bytes text;
+  Vec(civue_quad) quads;
+  Vec(civue_region) regions;
+  // where its parent's children started, in points, and the clip and what
+  // it drew, in pixels.
+  civue_vec2 origin;
+  f32 clip[4], box[4];
+} Memo;
+
+// a memo being recorded.
+typedef struct {
+  civue_id id;
+  u32 node, node_end, text, text_end, quad, region, batch, other;
+  civue_texture texture;
+  bool overlay, multiply, kept_hidden, repaint, focus_alive, failed;
+  f64 repaint_at;
+  u32 scroll_areas, cuts, open;
+} Take;
+
 struct civue_tree {
   Vec(Node) nodes;
   Vec(Placed) prev;
@@ -105,6 +148,13 @@ struct civue_tree {
   u32 roots, first_root, last_root;
   f32 rem;
   bool dirty;
+  // where the next node goes when the last frame had none of it.
+  bool has_hint, hint_quiet;
+  f32 hint[4];
+  Vec(Memo) memos;
+  civue_map memo_index;
+  // the memos being recorded, then the ones the frame's solve confirms.
+  Vec(Take) takes, taken;
 };
 
 static civue_tree *tree(civue_ui *ui) {
@@ -115,6 +165,13 @@ static civue_tree *tree(civue_ui *ui) {
   }
 
   return ui->tree;
+}
+
+static void memo_free(Memo *m) {
+  vec_free(&m->nodes);
+  vec_free(&m->text);
+  vec_free(&m->quads);
+  vec_free(&m->regions);
 }
 
 void civue__tree_free(civue_tree *t) {
@@ -131,6 +188,13 @@ void civue__tree_free(civue_tree *t) {
   vec_free(&t->tracks);
   vec_free(&t->cells);
   vec_free(&t->text);
+  vec_each(&t->memos, m) {
+    memo_free(m);
+  }
+  vec_free(&t->memos);
+  map_free(&t->memo_index);
+  vec_free(&t->takes);
+  vec_free(&t->taken);
   own_free(t);
 }
 
@@ -406,21 +470,52 @@ static void paint(civue_ui *ui, civue_tree *t, const civue_node_style *s,
   }
 }
 
-static u32 add(civue_ui *ui, civue_tree *t, const civue_node_style *s,
-               bool is_text, Open *o) {
-  Open *parent = t->open.len && vec_last(&t->open).overlay == ui->on_overlay
-                   ? &vec_last(&t->open)
-                   : nullptr;
-  u32 i = t->nodes.len;
-  Node *n = vec_add(&t->nodes);
-  memcpy(&n->l, s, sizeof n->l);
-  n->is_text = is_text;
-  n->first = n->last = n->next = NIL;
+// whether any length of a node is a fraction of what holds it: one with
+// none is laid out the same in any containing block.
+static bool relative(const civue_node_layout *l) {
+  const civue_length *sizes[] = {&l->w,     &l->h,     &l->min_w,
+                                 &l->min_h, &l->max_w, &l->max_h,
+                                 &l->basis, &l->gap_x, &l->gap_y};
+  for (u32 i = 0; i < sizeof sizes / sizeof *sizes; i++) {
+    if (sizes[i]->unit == CIVUE_UNIT_RELATIVE) {
+      return true;
+    }
+  }
+
+  for (u32 i = 0; i < 4; i++) {
+    if (l->padding[i].unit == CIVUE_UNIT_RELATIVE ||
+        l->inset[i].unit == CIVUE_UNIT_RELATIVE) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// the node new ones go in: the one open, unless an overlay started since.
+static Open *parent_of(civue_ui *ui, civue_tree *t) {
+  return t->open.len && vec_last(&t->open).overlay == ui->on_overlay
+           ? &vec_last(&t->open)
+           : nullptr;
+}
+
+// who the next child of `parent` is when it has no key, a root when null.
+static civue_id next_id(const civue_tree *t, const Open *parent) {
+  if (parent) {
+    return civue_idn(t->nodes.v[parent->node].id, parent->children);
+  }
+
+  return civue_idn(0x9e3779b97f4a7c15ull, t->roots);
+}
+
+// makes node `i` the last child of `parent`, or the last root.
+static void link(civue_tree *t, Open *parent, u32 i) {
+  Node *n = &t->nodes.v[i];
+  n->next = NIL;
 
   if (parent) {
     Node *p = &t->nodes.v[parent->node];
     n->parent = parent->node;
-    n->id = s->key ? s->key : civue_idn(p->id, parent->children);
     parent->children++;
     if (p->last == NIL) {
       p->first = i;
@@ -429,28 +524,48 @@ static u32 add(civue_ui *ui, civue_tree *t, const civue_node_style *s,
       t->nodes.v[p->last].next = i;
     }
     p->last = i;
+    return;
+  }
+
+  n->parent = NIL;
+  t->roots++;
+  if (t->last_root == NIL) {
+    t->first_root = i;
   }
   else {
-    n->parent = NIL;
-    n->id = s->key ? s->key : civue_idn(0x9e3779b97f4a7c15ull, t->roots);
-    t->roots++;
-    if (t->last_root == NIL) {
-      t->first_root = i;
-    }
-    else {
-      t->nodes.v[t->last_root].next = i;
-    }
-    t->last_root = i;
+    t->nodes.v[t->last_root].next = i;
   }
+  t->last_root = i;
+}
+
+static u32 add(civue_ui *ui, civue_tree *t, const civue_node_style *s,
+               bool is_text, Open *o) {
+  Open *parent = parent_of(ui, t);
+  u32 i = t->nodes.len;
+  Node *n = vec_add(&t->nodes);
+  memcpy(&n->l, s, sizeof n->l);
+  n->is_text = is_text;
+  n->first = n->last = n->next = NIL;
+
+  n->id = s->key ? s->key : next_id(t, parent);
+  n->relative = relative(&n->l);
+  link(t, parent, i);
 
   const Placed *was = placed(t, i, n->id);
   if (was) {
     n->ux = was->x, n->uy = was->y, n->uw = was->w, n->uh = was->h;
     n->ucw = was->cw, n->uch = was->ch;
   }
+  else if (t->has_hint) {
+    n->ux = t->hint[0], n->uy = t->hint[1];
+    n->uw = t->hint[2], n->uh = t->hint[3];
+  }
+
+  n->quiet = (parent && parent->quiet) || (t->has_hint && t->hint_quiet);
+  t->has_hint = false;
 
   civue_vec2 at = parent ? parent->origin : v2(0, 0);
-  *o = (Open){.node = i, .overlay = ui->on_overlay};
+  *o = (Open){.node = i, .overlay = ui->on_overlay, .quiet = n->quiet};
   o->rect = rect_xywh(at.x + n->ux, at.y + n->uy, n->uw, n->uh);
   o->origin = v2(o->rect.x0, o->rect.y0);
   inherit(ui, t, o, parent, s);
@@ -497,14 +612,32 @@ void civue_node_close(civue_ui *ui) {
   }
 }
 
-static const civue_text_block *shape(civue_ui *ui, const Node *n, const char *s,
+// a text node's text on one line, asked once a frame.
+static const civue_text_block *whole(civue_ui *ui, const civue_tree *t,
+                                     Node *n) {
+  if (!n->whole) {
+    const char *s = (const char *)t->text.v + n->text_at;
+    n->whole = civue_layout_n(ui, s, n->text_len, n->ts, 0);
+  }
+
+  return n->whole;
+}
+
+static const civue_text_block *shape(civue_ui *ui, const civue_tree *t, Node *n,
                                      f32 width) {
-  const civue_text_block *full = civue_layout_n(ui, s, n->text_len, n->ts, 0);
+  const civue_text_block *full = whole(ui, t, n);
   if (n->nowrap || n->truncate || full->width <= width + SETTLED) {
     return full;
   }
 
-  return civue_layout_n(ui, s, n->text_len, n->ts, fmaxf(width, TINY));
+  f32 w = fmaxf(width, TINY);
+  if (!n->wrapped || n->wrap_width != w) {
+    const char *s = (const char *)t->text.v + n->text_at;
+    n->wrapped = civue_layout_n(ui, s, n->text_len, n->ts, w);
+    n->wrap_width = w;
+  }
+
+  return n->wrapped;
 }
 
 // each line of a wrapped block moved within `w` on its own, as css aligns
@@ -548,7 +681,7 @@ void civue_node_text_n(civue_ui *ui, const char *s, usize len,
   f32 w = (f32)rect_w(box);
   const char *str = (const char *)t->text.v + n->text_at;
   const civue_text_block *b =
-    n->truncate ? civue_fit(ui, str, n->ts, w) : shape(ui, n, str, w);
+    n->truncate ? civue_fit(ui, str, n->ts, w) : shape(ui, t, n, w);
 
   if (o.align != CIVUE_TEXT_LEFT && b->nlines > 1 && !n->truncate) {
     draw_lines(ui, b, n, str, box, o.align, o.color);
@@ -622,6 +755,10 @@ static Size compute(civue_ui *ui, civue_tree *t, u32 i, f32 kw, f32 kh, f32 aw,
 static void place(civue_tree *t, u32 i, f32 x, f32 y, f32 w, f32 h) {
   Node *n = &t->nodes.v[i];
   n->x = x, n->y = y, n->w = w, n->h = h;
+  if (n->quiet) {
+    return;
+  }
+
   if (fabsf(x - n->ux) > SETTLED || fabsf(y - n->uy) > SETTLED ||
       fabsf(w - n->uw) > SETTLED || fabsf(h - n->uh) > SETTLED) {
     t->dirty = true;
@@ -665,18 +802,17 @@ static void absolute(civue_ui *ui, civue_tree *t, u32 i, f32 ox, f32 oy, f32 cw,
   place(t, i, x, y, z.w, z.h);
 }
 
-static Size measure_text(civue_ui *ui, civue_tree *t, const Node *n,
-                         const Box *b, f32 aw) {
+static Size measure_text(civue_ui *ui, civue_tree *t, Node *n, const Box *b,
+                         f32 aw) {
   f32 avail = (isnan(b->w) ? fminf(aw, b->maxw) : b->w) - b->ph;
-  const char *s = (const char *)t->text.v + n->text_at;
-  const civue_text_block *full = civue_layout_n(ui, s, n->text_len, n->ts, 0);
+  const civue_text_block *full = whole(ui, t, n);
   f32 tw = full->width, th = full->height;
 
   if (n->truncate) {
     tw = fminf(tw, fmaxf(avail, 0));
   }
   else if (!n->nowrap && tw > avail + SETTLED) {
-    const civue_text_block *wrapped = shape(ui, n, s, avail);
+    const civue_text_block *wrapped = shape(ui, t, n, avail);
     tw = fmaxf(wrapped->width, avail);
     th = wrapped->height;
   }
@@ -834,8 +970,9 @@ static void flexible(civue_ui *ui, civue_tree *t, u32 from, u32 to, f32 target,
                   (!grow && v[k].basis < v[k].hyp);
   }
 
-  // what an item holds at least when nothing says, its min-content size.
-  if (!grow) {
+  // what an item holds at least when nothing says, its min-content size,
+  // which only matters to items that shrink.
+  if (used > target) {
     for (u32 k = from; k < to; k++) {
       if (v[k].frozen || !v[k].auto_min) {
         continue;
@@ -1516,7 +1653,7 @@ static void finish(civue_ui *ui, civue_tree *t, u32 i, const Box *b, Size z) {
   n->ch = bottom - b->bor.t + b->pad.b;
   bool scrolls = b->s->overflow_x == CIVUE_OVERFLOW_SCROLL ||
                  b->s->overflow_y == CIVUE_OVERFLOW_SCROLL;
-  if (scrolls &&
+  if (scrolls && !n->quiet &&
       (fabsf(n->cw - n->ucw) > SETTLED || fabsf(n->ch - n->uch) > SETTLED)) {
     t->dirty = true;
   }
@@ -1524,12 +1661,6 @@ static void finish(civue_ui *ui, civue_tree *t, u32 i, const Box *b, Size z) {
 
 static Size compute(civue_ui *ui, civue_tree *t, u32 i, f32 kw, f32 kh, f32 aw,
                     f32 ah, f32 cbw, f32 cbh, u32 flags) {
-  f32 key[7] = {kw, kh, aw, ah, cbw, cbh, (f32)(flags & COLLAPSE)};
-  Size out;
-  if (!(flags & PERFORM) && cached(&t->nodes.v[i], key, &out)) {
-    return out;
-  }
-
   const civue_node_layout *s = &t->nodes.v[i].l;
   Box b = {.s = s, .flags = flags};
   b.pad = edges(t, s->padding, cbw);
@@ -1564,6 +1695,28 @@ static Size compute(civue_ui *ui, civue_tree *t, u32 i, f32 kw, f32 kh, f32 aw,
   b.aiw = (isnan(b.w) ? fminf(aw, b.maxw) : b.w) - b.ph;
   b.aih = (isnan(b.h) ? fminf(ah, b.maxh) : b.h) - b.pv;
 
+  // asked the same when what differs can't change the answer: by its size
+  // however it came to it, the room around it when that size is set, the
+  // containing block when it has no fraction of it.
+  Node *n = &t->nodes.v[i];
+  f32 key[7] = {b.w,
+                b.h,
+                isnan(b.w) ? aw : 0,
+                isnan(b.h) ? ah : 0,
+                n->relative ? cbw : 0,
+                n->relative ? cbh : 0,
+                (f32)(flags & COLLAPSE)};
+  Size out;
+  if (!(flags & PERFORM) && cached(n, key, &out)) {
+    return out;
+  }
+
+  // what a memo put back is where its frame left it when asked the same.
+  if ((flags & PERFORM) && n->kept && n->solved &&
+      !memcmp(n->solved_key, key, sizeof key)) {
+    return n->solved_size;
+  }
+
   if (t->nodes.v[i].is_text) {
     out = measure_text(ui, t, &t->nodes.v[i], &b, aw);
   }
@@ -1579,12 +1732,371 @@ static Size compute(civue_ui *ui, civue_tree *t, u32 i, f32 kw, f32 kh, f32 aw,
 
   if (flags & PERFORM) {
     finish(ui, t, i, &b, out);
+    Node *n = &t->nodes.v[i];
+    n->solved = true;
+    n->solved_size = out;
+    memcpy(n->solved_key, key, sizeof key);
   }
   else {
     remember(&t->nodes.v[i], key, out);
   }
 
   return out;
+}
+
+// ---- memos ----
+
+// memos not asked for in this many frames are let go.
+constexpr u64 MEMO_FRAMES = 600;
+
+static bool near(f32 a, f32 b) {
+  return fabsf(a - b) <= SETTLED;
+}
+
+static Memo *memo_find(civue_tree *t, civue_id id) {
+  u64 at;
+  return map_get(&t->memo_index, id, &at) ? &t->memos.v[at - 1] : nullptr;
+}
+
+static Memo *memo_of(civue_tree *t, civue_id id) {
+  Memo *m = memo_find(t, id);
+  if (!m) {
+    m = vec_add(&t->memos);
+    m->id = id;
+    map_put(&t->memo_index, id, t->memos.len);
+  }
+
+  return m;
+}
+
+static void forget_memos(civue_ui *ui, civue_tree *t) {
+  if (ui->frames % 256 || !t->memos.len) {
+    return;
+  }
+
+  u32 k = 0;
+  map_clear(&t->memo_index);
+  vec_each(&t->memos, m) {
+    if (ui->frames - m->used > MEMO_FRAMES) {
+      memo_free(m);
+      continue;
+    }
+
+    t->memos.v[k++] = *m;
+    map_put(&t->memo_index, m->id, k);
+  }
+  t->memos.len = k;
+}
+
+// all a block's nodes take from what is around them.
+static u64 around(civue_ui *ui, const civue_tree *t, const Open *parent) {
+  struct {
+    civue_id next;
+    civue_text_style ts;
+    civue_color color;
+    f32 lh_rel, scale, rem;
+    u32 flags;
+  } a = {};
+
+  a.next = next_id(t, parent);
+  a.scale = ui->scale;
+  a.rem = t->rem;
+  a.flags = ui->dark | ui->on_overlay << 1;
+
+  if (parent) {
+    a.ts = parent->ts;
+    a.color = parent->color;
+    a.lh_rel = parent->lh_rel;
+    a.flags |=
+      (u32)parent->align << 2 | parent->nowrap << 5 | parent->truncate << 6;
+  }
+
+  return hash_bytes(&a, sizeof a);
+}
+
+static bool holds(const Memo *m, civue_id id) {
+  if (!id) {
+    return false;
+  }
+
+  vec_each(&m->regions, r) {
+    if (r->id == id) {
+      return true;
+    }
+  }
+
+  vec_each(&m->nodes, n) {
+    if (n->id == id) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// whether what the memo drew, moved by `dx` and `dy` pixels, is under `p`.
+static bool under(const civue_ui *ui, const Memo *m, f32 dx, f32 dy,
+                  civue_vec2 p) {
+  f64 x = p.x * ui->scale - dx, y = p.y * ui->scale - dy;
+  return x >= m->box[0] - 1 && y >= m->box[1] - 1 && x <= m->box[2] + 1 &&
+         y <= m->box[3] + 1;
+}
+
+// whether the memo's block would build what it built: nothing it answers to
+// happened, and its nodes are where they were, all moved by whole pixels.
+static bool stands(civue_ui *ui, civue_tree *t, const Memo *m,
+                   const Open *parent, f32 *dx, f32 *dy) {
+  const civue_input *in = &ui->input;
+  if (in->keys.len || in->text.len || in->drops.len || in->commands.len) {
+    return false;
+  }
+
+  for (u32 i = 0; i < 3; i++) {
+    if (in->pressed[i] || in->released[i]) {
+      return false;
+    }
+  }
+
+  if (holds(m, ui->active) || holds(m, ui->focus) || holds(m, ui->ring)) {
+    return false;
+  }
+
+  civue_vec2 at = parent ? parent->origin : v2(0, 0);
+  f64 mx = (at.x - m->origin.x) * ui->scale;
+  f64 my = (at.y - m->origin.y) * ui->scale;
+  if (fabs(mx - round(mx)) > 1e-3 || fabs(my - round(my)) > 1e-3) {
+    return false;
+  }
+
+  *dx = (f32)round(mx), *dy = (f32)round(my);
+  civue_rect c = civue_dl_clip(civue_list(ui));
+  f32 clip[4] = {(f32)c.x0, (f32)c.y0, (f32)c.x1, (f32)c.y1};
+  if (m->exact && (*dx || *dy || memcmp(clip, m->clip, sizeof clip))) {
+    return false;
+  }
+
+  if ((in->has_mouse && under(ui, m, *dx, *dy, in->mouse)) ||
+      (ui->had_mouse && under(ui, m, *dx, *dy, ui->last_mouse))) {
+    return false;
+  }
+
+  u32 base = t->nodes.len;
+  for (u32 i = 0; i < m->nodes.len; i++) {
+    const Node *n = &m->nodes.v[i];
+    const Placed *was = placed(t, base + i, n->id);
+    if (was &&
+        !(near(was->x, n->x) && near(was->y, n->y) && near(was->w, n->w) &&
+          near(was->h, n->h) && near(was->cw, n->cw) && near(was->ch, n->ch))) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+// puts back the nodes the memo's block built, and what they drew.
+static void put_back(civue_ui *ui, civue_tree *t, const Memo *m, Open *parent,
+                     f32 dx, f32 dy) {
+  u32 base = t->nodes.len, text = t->text.len;
+  bool quiet = parent && parent->quiet;
+
+  vec_extend(&t->nodes, m->nodes.v, m->nodes.len);
+  vec_extend(&t->text, m->text.v, m->text.len);
+
+  for (u32 i = 0; i < m->nodes.len; i++) {
+    Node *n = &t->nodes.v[base + i];
+    bool top = n->parent == NIL || n->parent < m->start;
+
+    n->first = n->first == NIL ? NIL : n->first - m->start + base;
+    n->last = n->last == NIL ? NIL : n->last - m->start + base;
+    n->text_at = n->text_at - m->text_start + text;
+    n->ux = n->x, n->uy = n->y, n->uw = n->w, n->uh = n->h;
+    n->ucw = n->cw, n->uch = n->ch;
+    n->quiet = quiet;
+    n->kept = true;
+    // the blocks of the frame it was recorded in may be gone.
+    n->whole = n->wrapped = nullptr;
+
+    if (top) {
+      link(t, parent, base + i);
+    }
+    else {
+      n->parent = n->parent - m->start + base;
+      n->next = n->next == NIL ? NIL : n->next - m->start + base;
+    }
+  }
+
+  civue_dl_replay(civue_list(ui), m->quads.v, m->quads.len, dx, dy, m->clip);
+
+  civue_vec2 by = v2(dx / ui->scale, dy / ui->scale);
+  civue_rect seen = civue_clip_rect(ui);
+  vec_each(&m->regions, r) {
+    civue_region moved = *r;
+    moved.rect = rect_intersect(rect(r->rect.x0 + by.x, r->rect.y0 + by.y,
+                                     r->rect.x1 + by.x, r->rect.y1 + by.y),
+                                seen);
+    if (!rect_empty(moved.rect)) {
+      vec_push(&ui->regions, moved);
+    }
+  }
+}
+
+civue_memo_scope civue_memo_begin(civue_ui *ui, civue_id id, u64 inputs) {
+  civue_tree *t = tree(ui);
+  Open *parent = parent_of(ui, t);
+  u64 a = around(ui, t, parent);
+  Memo *m = memo_of(t, id);
+  m->used = ui->frames;
+
+  f32 dx = 0, dy = 0;
+  if (m->valid && m->inputs == inputs && m->around == a &&
+      stands(ui, t, m, parent, &dx, &dy)) {
+    put_back(ui, t, m, parent, dx, dy);
+    return (civue_memo_scope){.ui = ui};
+  }
+
+  m->valid = false;
+  m->inputs = inputs;
+  m->around = a;
+  m->origin = parent ? parent->origin : v2(0, 0);
+
+  civue_draw_list *d = civue_list(ui);
+  civue_rect c = civue_dl_clip(d);
+  m->clip[0] = (f32)c.x0, m->clip[1] = (f32)c.y0;
+  m->clip[2] = (f32)c.x1, m->clip[3] = (f32)c.y1;
+
+  const civue_draw_list *other = ui->on_overlay ? &ui->base : &ui->overlay;
+  Take take = {
+    .id = id,
+    .node = t->nodes.len,
+    .text = t->text.len,
+    .quad = d->quads.len,
+    .region = ui->regions.len,
+    .batch = d->batches.len,
+    .other = other->quads.len,
+    .texture = d->batches.len ? vec_last(&d->batches).texture : 0,
+    .overlay = ui->on_overlay,
+    .multiply = d->multiply,
+    .kept_hidden = d->keep_hidden,
+    .repaint = ui->repaint,
+    .focus_alive = ui->focus_alive,
+    .repaint_at = ui->repaint_at,
+    .scroll_areas = ui->scroll_areas,
+    .cuts = d->cuts,
+    .open = t->open.len,
+  };
+  vec_push(&t->takes, take);
+  d->keep_hidden = true;
+
+  return (civue_memo_scope){.ui = ui, .build = true, .recording = true};
+}
+
+// whether what was recorded can be drawn again as it is: nothing in it
+// moves by itself, scrolls, holds the focus or draws an image, and all of it
+// went to one list.
+static bool lasting(const civue_ui *ui, const civue_tree *t, const Take *k,
+                    const civue_draw_list *d) {
+  const civue_draw_list *other = k->overlay ? &ui->base : &ui->overlay;
+  if (k->failed || ui->on_overlay != k->overlay ||
+      other->quads.len != k->other || t->open.len != k->open) {
+    return false;
+  }
+
+  if ((ui->repaint && !k->repaint) || ui->repaint_at != k->repaint_at ||
+      (ui->focus_alive && !k->focus_alive) ||
+      ui->scroll_areas != k->scroll_areas) {
+    return false;
+  }
+
+  // no image: the batch it was drawn in before, and any it started.
+  if (d->multiply || k->multiply ||
+      (k->batch && d->batches.v[k->batch - 1].texture != k->texture)) {
+    return false;
+  }
+
+  for (u32 i = k->batch; i < d->batches.len; i++) {
+    if (d->batches.v[i].texture || d->batches.v[i].multiply) {
+      return false;
+    }
+  }
+
+  for (u32 i = k->quad; i < d->quads.len; i++) {
+    const f32 *turn = d->quads.v[i].turn;
+    if (turn[0] != 0 || turn[1] != 0) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+void civue_memo_end(civue_memo_scope *s) {
+  if (!s->recording) {
+    return;
+  }
+
+  civue_ui *ui = s->ui;
+  civue_tree *t = tree(ui);
+  Take k = vec_pop(&t->takes);
+  civue_draw_list *d = k.overlay ? &ui->overlay : &ui->base;
+  d->keep_hidden = k.kept_hidden;
+
+  Memo *m = memo_find(t, k.id);
+  if (!m || !lasting(ui, t, &k, d)) {
+    return;
+  }
+
+  m->exact = d->cuts != k.cuts;
+  m->quads.len = 0;
+  vec_extend(&m->quads, d->quads.v + k.quad, d->quads.len - k.quad);
+  m->regions.len = 0;
+  vec_extend(&m->regions, ui->regions.v + k.region, ui->regions.len - k.region);
+
+  m->box[0] = m->box[1] = INFINITY;
+  m->box[2] = m->box[3] = -INFINITY;
+  vec_each(&m->quads, q) {
+    m->box[0] = fminf(m->box[0], q->rect[0]);
+    m->box[1] = fminf(m->box[1], q->rect[1]);
+    m->box[2] = fmaxf(m->box[2], q->rect[0] + q->rect[2]);
+    m->box[3] = fmaxf(m->box[3], q->rect[1] + q->rect[3]);
+  }
+
+  k.node_end = t->nodes.len;
+  k.text_end = t->text.len;
+  vec_push(&t->taken, k);
+}
+
+// the memos recorded this frame are kept when the solve left their nodes
+// where they were painted.
+static void keep_memos(civue_ui *ui, civue_tree *t) {
+  vec_each(&t->taken, k) {
+    Memo *m = memo_find(t, k->id);
+    if (!m) {
+      continue;
+    }
+
+    bool settled = true;
+    for (u32 i = k->node; i < k->node_end && settled; i++) {
+      const Node *n = &t->nodes.v[i];
+      settled = near(n->x, n->ux) && near(n->y, n->uy) && near(n->w, n->uw) &&
+                near(n->h, n->uh) && near(n->cw, n->ucw) && near(n->ch, n->uch);
+    }
+
+    if (!settled) {
+      continue;
+    }
+
+    m->start = k->node;
+    m->text_start = k->text;
+    m->nodes.len = 0;
+    vec_extend(&m->nodes, t->nodes.v + k->node, k->node_end - k->node);
+    m->text.len = 0;
+    vec_extend(&m->text, t->text.v + k->text, k->text_end - k->text);
+    m->valid = true;
+  }
+
+  t->taken.len = 0;
+  forget_memos(ui, t);
 }
 
 bool civue__tree_end(civue_ui *ui) {
@@ -1597,11 +2109,17 @@ bool civue__tree_end(civue_ui *ui) {
     die("civue: %u nodes were left open", t->open.len);
   }
 
+  if (t->takes.len) {
+    die("civue: %u memos were left open", t->takes.len);
+  }
+
   t->dirty = false;
   f32 w = (f32)ui->size.x, h = (f32)ui->size.y;
   for (u32 r = t->first_root; r != NIL; r = t->nodes.v[r].next) {
     absolute(ui, t, r, 0, 0, w, h, 0, 0);
   }
+
+  keep_memos(ui, t);
 
   t->prev.len = 0;
   vec_reserve(&t->prev, t->nodes.len);
@@ -1616,6 +2134,81 @@ bool civue__tree_end(civue_ui *ui) {
   t->roots = 0;
   t->first_root = t->last_root = NIL;
   return !t->dirty;
+}
+
+// ---- rows ----
+
+// rows built past each end of the view, so one scrolled into view was laid
+// out the frame before.
+constexpr u32 OVERSCAN = 2;
+
+civue_rows_scope civue_rows_begin(civue_ui *ui, u32 count, f32 row_height) {
+  civue_tree *t = tree(ui);
+  f32 rh = fmaxf(row_height, 1);
+
+  // which rows are built follows the scroll, that no memo around them sees.
+  vec_each(&t->takes, k) {
+    k->failed = true;
+  }
+
+  civue_node_open(
+    ui, &(civue_node_style){.h = civue_px(count * rh), .has_shrink = true});
+
+  const Open *o = top(t);
+  civue_rows_scope s = {
+    .ui = ui, .open = true, .id = t->nodes.v[o->node].id, .row_height = rh};
+  civue_rect seen = civue_clip_rect(ui);
+  f64 y0 = fmax(seen.y0, 0) - o->rect.y0;
+  f64 y1 = fmin(seen.y1, ui->size.y) - o->rect.y0;
+
+  if (rect_empty(o->rect) || y1 <= y0) {
+    // not laid out yet, or out of view: enough rows to have a size.
+    s.last = MIN(count, OVERSCAN);
+  }
+  else {
+    f64 first = floor(y0 / rh) - OVERSCAN, last = ceil(y1 / rh) + OVERSCAN;
+    s.first = (u32)fmin(fmax(first, 0), count);
+    s.last = (u32)fmin(fmax(last, s.first), count);
+  }
+
+  if (s.first) {
+    civue_node_open(ui, &(civue_node_style){.key = civue_ids(s.id, "before"),
+                                            .h = civue_px(s.first * rh),
+                                            .has_shrink = true});
+    civue_node_close(ui);
+  }
+
+  return s;
+}
+
+void civue_rows_end(civue_rows_scope *s) {
+  civue_node_close(s->ui);
+}
+
+void civue_row_open(civue_rows_scope *s, u32 i) {
+  civue_ui *ui = s->ui;
+  civue_tree *t = tree(ui);
+  const Open *o = top(t);
+  f32 rh = s->row_height, y = i * rh;
+  civue_rect seen = civue_clip_rect(ui);
+
+  // a row the last frame had not is where its index puts it, and settles
+  // out of view without the frame running again.
+  t->has_hint = true;
+  t->hint[0] = 0, t->hint[1] = y;
+  t->hint[2] = (f32)rect_w(o->rect), t->hint[3] = rh;
+  t->hint_quiet = o->rect.y0 + y + rh <= seen.y0 || o->rect.y0 + y >= seen.y1;
+
+  civue_node_open(ui, &(civue_node_style){.key = civue_idn(s->id, i),
+                                          .h = civue_px(rh),
+                                          .has_shrink = true});
+
+  // what it holds has no place yet either, and must not show past it.
+  Open *row = top(t);
+  if (row->quiet && !row->clip && !row->scroll) {
+    civue_push_clip(ui, row->rect);
+    row->clip = true;
+  }
 }
 
 // ---- widgets ----

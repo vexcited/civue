@@ -217,6 +217,12 @@ struct civue_ui {
   civue_vec2 last_mouse;
   // frames begun, to tell a fresh showing from a kept one.
   uint64_t frames;
+  // this pass builds again a frame whose layout moved: what an app does once
+  // a frame, it does when this is false.
+  bool rerun;
+  bool settled;
+  // the scroll areas begun this frame.
+  uint32_t scroll_areas;
   // what took the pointer this frame and the last.
   CIVUE_VEC(civue_region) regions, prev_regions;
   civue_id hovered, active;

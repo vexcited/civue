@@ -218,6 +218,72 @@ static inline void civue__node_end(civue_scope *s) {
        CIVUE__SCOPE.open; CIVUE__SCOPE.open = false)
 
 /* ========================================================================== */
+/* rows. a list of `count` rows of one height, of which only the ones in view */
+/* are built: a hundred thousand cost what a screen of them does. it goes in  */
+/* a node that scrolls, and each row is a node `row_height` tall, known by    */
+/* its index.                                                                 */
+/* ========================================================================== */
+
+typedef struct {
+  civue_ui *ui;
+  bool open;
+  // the rows to build, `last` excluded.
+  uint32_t first, last;
+  civue_id id;
+  float row_height;
+} civue_rows_scope;
+
+civue_rows_scope civue_rows_begin(civue_ui *ui, uint32_t count,
+                                  float row_height);
+void civue_rows_end(civue_rows_scope *s);
+// opens the node of row `i`, closed by civue_node_close.
+void civue_row_open(civue_rows_scope *s, uint32_t i);
+
+static inline civue_scope civue__row_begin(civue_rows_scope *s, uint32_t i) {
+  civue_row_open(s, i);
+  return (civue_scope){.ui = s->ui, .open = true};
+}
+
+#define CIVUE__ROWS CIVUE__CAT(civue__rows_, __LINE__)
+
+// the rows in view, `i` the index of each.
+#define CIVUE_ROWS(ui, count, row_height, i)                            \
+  for (civue_rows_scope CIVUE__ROWS [[gnu::cleanup(civue_rows_end)]] =  \
+         civue_rows_begin(ui, count, row_height);                       \
+       CIVUE__ROWS.open; CIVUE__ROWS.open = false)                      \
+    for (uint32_t i = CIVUE__ROWS.first; i < CIVUE__ROWS.last; i++)     \
+      for (civue_scope CIVUE__SCOPE [[gnu::cleanup(civue__node_end)]] = \
+             civue__row_begin(&CIVUE__ROWS, i);                         \
+           CIVUE__SCOPE.open; CIVUE__SCOPE.open = false)
+
+/* ========================================================================== */
+/* memos. the nodes a block builds and what they draw are kept, and put back  */
+/* without running the block while `inputs` stays what it was: a hash of all  */
+/* the block reads, as civue_hash makes one. the block runs again by itself   */
+/* when the pointer is over it, when it holds the focus or what is pressed,   */
+/* when a key or a button changed, when it asks for another frame, or when    */
+/* what is around it changed its text style, its size or its place by other   */
+/* than whole pixels.                                                         */
+/* ========================================================================== */
+
+typedef struct {
+  civue_ui *ui;
+  // whether the block runs.
+  bool build;
+  bool recording;
+} civue_memo_scope;
+
+civue_memo_scope civue_memo_begin(civue_ui *ui, civue_id id, uint64_t inputs);
+void civue_memo_end(civue_memo_scope *s);
+
+#define CIVUE__MEMO CIVUE__CAT(civue__memo_, __LINE__)
+
+#define CIVUE_MEMO(ui, id, inputs)                                          \
+  for (civue_memo_scope CIVUE__MEMO                                         \
+       [[gnu::cleanup(civue_memo_end)]] = civue_memo_begin(ui, id, inputs); \
+       CIVUE__MEMO.build; CIVUE__MEMO.build = false)
+
+/* ========================================================================== */
 /* gpui's style names, the ones <civue/dsl.h> takes in div and text. each     */
 /* name is pasted after CIVUE__S_, so they exist nowhere else and no header   */
 /* or variable of the app can clash with them.                                */

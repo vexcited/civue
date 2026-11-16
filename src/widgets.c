@@ -232,6 +232,7 @@ civue_rect civue_scroll_area_xy(civue_ui *ui, civue_id id, civue_rect r, f32 cw,
 civue_rect civue_scroll_area_look(civue_ui *ui, civue_id id, civue_rect r,
                                   f32 cw, f32 ch,
                                   const civue_scrollbar_look *look) {
+  ui->scroll_areas++;
   if (!look) {
     look = ui->scrollbars;
   }

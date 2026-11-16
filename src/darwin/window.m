@@ -293,6 +293,9 @@ static void frame(id<MTLTexture> texture, id<CAMetalDrawable> drawable) {
       }
     }
 
+    // a frame that never settled is shown as it is, the next one is new.
+    ui->settled = true;
+
     id<MTLCommandQueue> queue = (__bridge id)civue_gfx_queue(W.gfx);
     id<MTLCommandBuffer> cb = [queue commandBuffer];
     civue_gfx_encode(W.gfx, (__bridge void *)cb, (__bridge void *)texture, pw,

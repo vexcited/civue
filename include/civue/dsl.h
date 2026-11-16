@@ -40,6 +40,9 @@
 #define icon(set, name, ...)                                \
   civue_node_icon(CIVUE_DSL_UI, CIVUE_ICON_##set##__##name, \
                   &CIVUE_NODE_STYLE(CIVUE__STYLES(__VA_ARGS__)))
+#define memo(id, inputs) CIVUE_MEMO(CIVUE_DSL_UI, id, inputs)
+#define rows(count, row_height, i) \
+  CIVUE_ROWS(CIVUE_DSL_UI, count, row_height, i)
 #define here() civue_node_rect(CIVUE_DSL_UI)
 #define content() civue_node_content(CIVUE_DSL_UI)
 #define last_size(id) civue_node_last_size(CIVUE_DSL_UI, id)

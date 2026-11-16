@@ -137,6 +137,8 @@ void civue_begin_frame(civue_ui *ui, civue_vec2 size, f32 scale,
   ui->focus_alive = false;
   ui->focus_kept = false;
   ui->frames++;
+  ui->rerun = ui->frames > 1 && !ui->settled;
+  ui->scroll_areas = 0;
   ui->has_ring_rect = false;
   if (ui->ring_press) {
     ui->ring_press--;
@@ -169,6 +171,7 @@ const civue_draw_list *civue_frame_list(civue_ui *ui) {
 
 bool civue_end_frame(civue_ui *ui) {
   bool settled = civue__tree_end(ui);
+  ui->settled = settled;
   // a press elsewhere, or the focused widget gone, ends the focus.
   if (!ui->focus_alive ||
       (ui->input.pressed[0] && ui->active != ui->focus && !ui->focus_kept)) {

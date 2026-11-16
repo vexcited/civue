@@ -1997,6 +1997,9 @@ static void frame() {
       break;
     }
   }
+
+  // a frame that never settled is shown as it is, the next one is new.
+  ui->settled = true;
   // the mask uploads with a submission of its own, before the frame's.
   bool round = W.custom_frame && W.translucent && !W.maximized &&
                !W.fullscreen && !W.tiled;

@@ -10,6 +10,8 @@ void civue_dl_clear(civue_draw_list *d) {
   d->clips.len = 0;
   d->multiply = false;
   memset(d->turn, 0, sizeof d->turn);
+  d->keep_hidden = false;
+  d->cuts = 0;
 }
 
 void civue_dl_free(civue_draw_list *d) {
@@ -36,6 +38,9 @@ civue_rect civue_dl_clip(const civue_draw_list *d) {
 
 void civue_dl_push_clip(civue_draw_list *d, civue_rect r) {
   civue_rect c = civue_dl_clip(d);
+  if (r.x0 < c.x0 || r.y0 < c.y0 || r.x1 > c.x1 || r.y1 > c.y1) {
+    d->cuts++;
+  }
   vec_push(&d->clips, rect(fmax(r.x0, c.x0), fmax(r.y0, c.y0), fmin(r.x1, c.x1),
                            fmin(r.y1, c.y1)));
 }
@@ -78,7 +83,7 @@ static void push(civue_draw_list *d, civue_quad q, civue_texture texture) {
   // nothing visible outside the clip.
   f32 m = q.params[1] == CIVUE_QUAD_SHADOW ? q.params[2] * 3 : 0;
   f32 *r = q.rect;
-  if (!turned &&
+  if (!turned && !d->keep_hidden &&
       (r[0] - m >= q.clip[2] || r[1] - m >= q.clip[3] ||
        r[0] + r[2] + m <= q.clip[0] || r[1] + r[3] + m <= q.clip[1])) {
     return;
@@ -92,6 +97,49 @@ static void push(civue_draw_list *d, civue_quad q, civue_texture texture) {
     last->texture = texture;
   }
   vec_push(&d->quads, q);
+}
+
+void civue_dl_replay(civue_draw_list *d, const civue_quad *quads, u32 count,
+                     f32 dx, f32 dy, const f32 was[4]) {
+  if (!count) {
+    return;
+  }
+
+  civue_rect c = civue_dl_clip(d);
+  f32 now[4] = {(f32)c.x0, (f32)c.y0, (f32)c.x1, (f32)c.y1};
+  bool still = dx == 0 && dy == 0 && !memcmp(now, was, sizeof now);
+
+  civue_batch *last = d->batches.len ? &vec_last(&d->batches) : nullptr;
+  if (!last || last->multiply != d->multiply) {
+    vec_push(&d->batches, ((civue_batch){d->quads.len, 0, d->multiply}));
+  }
+
+  vec_reserve(&d->quads, count);
+  civue_quad *out = d->quads.v + d->quads.len;
+  memcpy(out, quads, sizeof *out * count);
+  d->quads.len += count;
+  if (still) {
+    return;
+  }
+
+  for (u32 i = 0; i < count; i++) {
+    civue_quad *q = &out[i];
+    q->rect[0] += dx, q->rect[1] += dy;
+    if (q->params[1] == CIVUE_QUAD_LINE) {
+      q->radii[0] += dx, q->radii[1] += dy;
+      q->radii[2] += dx, q->radii[3] += dy;
+    }
+
+    if (!memcmp(q->clip, was, sizeof q->clip)) {
+      memcpy(q->clip, now, sizeof now);
+      continue;
+    }
+
+    q->clip[0] = fmaxf(q->clip[0] + dx, now[0]);
+    q->clip[1] = fmaxf(q->clip[1] + dy, now[1]);
+    q->clip[2] = fminf(q->clip[2] + dx, now[2]);
+    q->clip[3] = fminf(q->clip[3] + dy, now[3]);
+  }
 }
 
 void civue_dl_rect(civue_draw_list *d, civue_rect r, const f32 radii[4],

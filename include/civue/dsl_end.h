@@ -16,6 +16,8 @@
 #undef div
 #undef text
 #undef icon
+#undef memo
+#undef rows
 #undef here
 #undef content
 #undef last_size
