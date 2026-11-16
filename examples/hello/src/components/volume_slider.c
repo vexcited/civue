@@ -25,6 +25,10 @@ void volume_slider(Hello *app, Look k) {
       app->volume = (float)volume.value;
     }
 
-    paint(content(), volume.x, k);
+    // where the value is now: volume.x is where the one given was.
+    civue_rect track = content();
+    double x = track.x0 + volume.value * (track.x1 - track.x0);
+
+    paint(track, x, k);
   }
 }
