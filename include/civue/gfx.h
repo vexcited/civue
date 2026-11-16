@@ -21,6 +21,10 @@ typedef struct civue_gfx civue_gfx;
 // a renderer on `device`, a device the app made or nullptr for the process's:
 // id<MTLDevice> on macos, the const civue_vk_device * of civue_vk on linux.
 civue_gfx *civue_gfx_new(void *device);
+// frees the renderer. on macos the command buffers it encoded may still be
+// with the gpu: they keep what they read, and freeing waits up to a second
+// for the ones that read the atlases, so every command buffer given to
+// civue_gfx_encode is to be committed. on linux the gpu is waited for.
 void civue_gfx_free(civue_gfx *g);
 void *civue_gfx_device(civue_gfx *g);
 // the command queue it encodes for on macos, id<MTLCommandQueue>.

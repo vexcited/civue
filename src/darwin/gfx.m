@@ -13,12 +13,24 @@ extern const size_t civue_ui_metallib_len;
 // the buffer slot of the quads, past the globals in slot 0.
 constexpr NSUInteger QUAD_SLOT = 1;
 
+// whether the gpu still reads a buffer. an object of its own, kept by the
+// command buffer that clears it: the renderer may be freed before the gpu
+// is done.
+@interface CivueBusy : NSObject {
+@public
+  _Atomic bool on;
+}
+@end
+
+@implementation CivueBusy
+@end
+
 // a buffer for a frame's quads, kept for the next frames instead of made and
 // freed each time. it is busy from encoding until the gpu is done with it.
 typedef struct {
   id<MTLBuffer> buffer;
   NSUInteger capacity;
-  _Atomic bool busy;
+  CivueBusy *busy;
 } QuadBuffer;
 
 constexpr u32 QUAD_BUFFERS = 3;
@@ -37,6 +49,8 @@ struct civue_gfx {
   id<MTLTexture> color_atlas_texture;
   // whether each is the atlas's own pixels.
   bool atlas_shared[2];
+  // the command buffers the gpu has yet to complete that read those pixels.
+  dispatch_group_t readers;
   id<MTLTexture> dummy;
   NSMutableDictionary<NSNumber *, id<MTLTexture>> *images;
   // the images civue uploaded itself, whose pixels never change.
@@ -65,11 +79,19 @@ static id<MTLTexture> texture(id<MTLDevice> device, MTLPixelFormat format,
 
 // a texture the cpu writes its pixels into. the driver keeps about 90 mb
 // around for as long as blits are encoded, however small they are, so
-// uploads go through replaceRegion instead.
+// uploads go through replaceRegion instead. only apple's gpus share a
+// texture's memory with the cpu, intel's and amd's keep a copy of it.
 static id<MTLTexture> written_texture(id<MTLDevice> device,
                                       MTLPixelFormat format, u32 w, u32 h) {
+  // deprecated since macos 27, which those gpus do not run.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  MTLStorageMode storage =
+    device.hasUnifiedMemory ? MTLStorageModeShared : MTLStorageModeManaged;
+#pragma clang diagnostic pop
+
   return texture_stored(device, format, w, h, MTLTextureUsageShaderRead,
-                        MTLStorageModeShared);
+                        storage);
 }
 
 static id<MTLSamplerState> sampler(id<MTLDevice> device,
@@ -92,9 +114,24 @@ static id<MTLDevice> device_of(civue_gfx *g) {
   return g->device;
 }
 
+// how long an atlas waits for the gpu before it writes over its pixels: a
+// command buffer never committed would keep it waiting.
+constexpr i64 SETTLE_NS = NSEC_PER_SEC;
+
+// waits for the frames the gpu still draws from an atlas's own pixels,
+// before glyphs go over the ones they show.
+static void settle(void *ctx) {
+  dispatch_group_t readers = (__bridge dispatch_group_t)ctx;
+  dispatch_group_wait(readers, dispatch_time(DISPATCH_TIME_NOW, SETTLE_NS));
+}
+
 civue_gfx *civue_gfx_new(void *device) {
   civue_gfx *g = xcalloc(1, sizeof *g);
   g->device = (__bridge id<MTLDevice>)device;
+  g->readers = dispatch_group_create();
+  g->atlas.reusing = g->color_atlas.reusing = settle;
+  g->atlas.reusing_ctx = g->color_atlas.reusing_ctx =
+    (__bridge void *)g->readers;
   g->images = [NSMutableDictionary dictionary];
   g->uploaded = [NSMutableSet set];
   g->atlas.bytes_per_pixel = 1;
@@ -259,7 +296,11 @@ static QuadBuffer *quad_buffer(civue_gfx *g, NSUInteger len) {
   for (u32 i = 0; i < QUAD_BUFFERS; i++) {
     QuadBuffer *q = &g->quad_buffers[i];
 
-    if (atomic_load(&q->busy)) {
+    if (!q->busy) {
+      q->busy = [CivueBusy new];
+    }
+
+    if (atomic_load(&q->busy->on)) {
       continue;
     }
 
@@ -275,7 +316,7 @@ static QuadBuffer *quad_buffer(civue_gfx *g, NSUInteger len) {
       }
     }
 
-    atomic_store(&q->busy, true);
+    atomic_store(&q->busy->on, true);
     return q;
   }
 
@@ -284,14 +325,16 @@ static QuadBuffer *quad_buffer(civue_gfx *g, NSUInteger len) {
 
 // a texture over the pixels an atlas keeps: the gpu reads the memory the
 // cpu writes, with nothing to upload and no second copy. nil when the
-// pixels cannot be shared, which only whole pages are.
+// pixels cannot be shared, which only whole pages are and only with apple's
+// gpus.
 static id<MTLTexture> shared_texture(civue_gfx *g, const civue_atlas *a,
                                      MTLPixelFormat format) {
   NSUInteger row = (NSUInteger)CIVUE_ATLAS_SIZE * a->bytes_per_pixel;
   NSUInteger len = row * CIVUE_ATLAS_SIZE;
   NSUInteger page = (NSUInteger)getpagesize();
 
-  if ((uintptr_t)a->pixels % page || len % page ||
+  if (!device_of(g).hasUnifiedMemory || (uintptr_t)a->pixels % page ||
+      len % page ||
       row % [device_of(g) minimumLinearTextureAlignmentForPixelFormat:format]) {
     return nil;
   }
@@ -399,16 +442,25 @@ void civue_gfx_encode(civue_gfx *g, void *command_buffer, void *target_texture,
     return;
   }
 
+  if (g->atlas_shared[0] || g->atlas_shared[1]) {
+    dispatch_group_t readers = g->readers;
+    dispatch_group_enter(readers);
+    [cb addCompletedHandler:^(id<MTLCommandBuffer>) {
+      dispatch_group_leave(readers);
+    }];
+  }
+
   if (list->quads.len) {
     NSUInteger len = list->quads.len * sizeof(civue_quad);
     QuadBuffer *slot = quad_buffer(g, len);
     id<MTLBuffer> quads;
 
     if (slot) {
+      CivueBusy *busy = slot->busy;
       quads = slot->buffer;
       memcpy(quads.contents, list->quads.v, len);
       [cb addCompletedHandler:^(id<MTLCommandBuffer>) {
-        atomic_store(&slot->busy, false);
+        atomic_store(&busy->on, false);
       }];
     }
     else {

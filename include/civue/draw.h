@@ -174,6 +174,10 @@ typedef struct {
   // the atlas is `stale` instead: all of it is to upload.
   bool keeps, stale;
   uint8_t *pixels;
+  // called before the atlas starts over or frees its pixels, when a renderer
+  // whose gpu reads them in place has frames to wait for.
+  void (*reusing)(void *ctx);
+  void *reusing_ctx;
 } civue_atlas;
 
 // room for a w by h bitmap, its uv returned, false when full. `data` is copied.

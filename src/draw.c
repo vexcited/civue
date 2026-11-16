@@ -354,6 +354,10 @@ bool civue_atlas_insert(civue_atlas *a, u32 w, u32 h, const u8 *data,
 }
 
 void civue_atlas_clear(civue_atlas *a) {
+  if (a->reusing) {
+    a->reusing(a->reusing_ctx);
+  }
+
   a->shelves.len = 0;
   a->top = 0;
   vec_each(&a->pending, p) {
