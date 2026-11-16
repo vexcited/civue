@@ -20,18 +20,24 @@ typedef double f64;
 typedef size_t usize;
 
 #define countof(a) (sizeof(a) / sizeof((a)[0]))
+// foundation has its own.
+#ifndef MIN
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
+#ifndef MAX
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
+#endif
 #define CLAMP(x, lo, hi) ((x) < (lo) ? (lo) : (x) > (hi) ? (hi) : (x))
 #define likely(x) __builtin_expect(!!(x), 1)
 #define unlikely(x) __builtin_expect(!!(x), 0)
 
-/* ========================================================================================================== */
-/* diagnostics and memory. what the app may free comes from malloc, what civue keeps to itself from cilo.     */
-/* ========================================================================================================== */
+/* ========================================================================== */
+/* diagnostics and memory. what the app may free comes from malloc, what      */
+/* civue keeps to itself from cilo.                                           */
+/* ========================================================================== */
 
-[[noreturn]] void civue__die(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
-void civue__log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+[[noreturn, gnu::format(printf, 1, 2)]] void civue__die(const char *fmt, ...);
+[[gnu::format(printf, 1, 2)]] void civue__log(const char *fmt, ...);
 #define die civue__die
 #define LOG civue__log
 #define now_s civue_now
@@ -40,62 +46,104 @@ void *civue__xmalloc(usize n);
 void *civue__xcalloc(usize n, usize size);
 void *civue__xrealloc(void *p, usize n);
 char *civue__xstrndup(const char *s, usize n);
-char *civue__xfmt(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+[[gnu::format(printf, 1, 2)]] char *civue__xfmt(const char *fmt, ...);
 #define xmalloc civue__xmalloc
 #define xcalloc civue__xcalloc
 #define xrealloc civue__xrealloc
 #define xstrndup civue__xstrndup
 #define xfmt civue__xfmt
-static inline char *xstrdup(const char *s) { return civue__xstrndup(s, strlen(s)); }
+
+static inline char *xstrdup(const char *s) {
+  return civue__xstrndup(s, strlen(s));
+}
 
 // zeroed memory civue allocates and frees itself.
-static inline void *own_new(usize size) { return cilo_calloc(1, size); }
-static inline void own_free(void *p) { cilo_mfree(p); }
+static inline void *own_new(usize size) {
+  return cilo_calloc(1, size);
+}
 
-/* ========================================================================================================== */
-/* growable arrays, the layout of CIVUE_VEC, grown with realloc.                                              */
-/* ========================================================================================================== */
+static inline void own_free(void *p) {
+  cilo_mfree(p);
+}
+
+/* ========================================================================== */
+/* growable arrays, the layout of CIVUE_VEC, grown with realloc.              */
+/* ========================================================================== */
 
 #define Vec(T) CIVUE_VEC(T)
 void civue__vec_grow(void **v, u32 *cap, u32 need, usize item);
-#define vec_reserve(a, n) \
-  ((a)->len + (n) > (a)->cap ? civue__vec_grow((void **)&(a)->v, &(a)->cap, (a)->len + (n), sizeof(*(a)->v)) : (void)0)
+#define vec_reserve(a, n)                                           \
+  ((a)->len + (n) > (a)->cap                                        \
+     ? civue__vec_grow((void **)&(a)->v, &(a)->cap, (a)->len + (n), \
+                       sizeof(*(a)->v))                             \
+     : (void)0)
 #define vec_push(a, x) (vec_reserve(a, 1), (a)->v[(a)->len++] = (x))
-#define vec_add(a) (vec_reserve(a, 1), memset(&(a)->v[(a)->len], 0, sizeof(*(a)->v)), &(a)->v[(a)->len++])
-#define vec_extend(a, src, n) \
-  ((n) ? (vec_reserve(a, n), memcpy(&(a)->v[(a)->len], src, sizeof(*(a)->v) * (n)), (a)->len += (n)) : 0)
+#define vec_add(a)                                                   \
+  (vec_reserve(a, 1), memset(&(a)->v[(a)->len], 0, sizeof(*(a)->v)), \
+   &(a)->v[(a)->len++])
+#define vec_extend(a, src, n)                                    \
+  ((n) ? (vec_reserve(a, n),                                     \
+          memcpy(&(a)->v[(a)->len], src, sizeof(*(a)->v) * (n)), \
+          (a)->len += (n))                                       \
+       : 0)
 #define vec_pop(a) ((a)->v[--(a)->len])
 #define vec_last(a) ((a)->v[(a)->len - 1])
 #define vec_free(a) (free((a)->v), (a)->v = nullptr, (a)->len = (a)->cap = 0)
 #define vec_clear(a) ((a)->len = 0)
-#define vec_each(a, it) for (typeof_unqual((a)->v) it = (a)->v; it && it < (a)->v + (a)->len; it++)
-#define vec_remove(a, i) (memmove(&(a)->v[i], &(a)->v[(i) + 1], sizeof(*(a)->v) * ((a)->len - (i) - 1)), (a)->len--)
-#define vec_insert(a, i, x)                                                                                       \
-  (vec_reserve(a, 1), memmove(&(a)->v[(i) + 1], &(a)->v[i], sizeof(*(a)->v) * ((a)->len - (i))), (a)->v[i] = (x), \
-   (a)->len++)
+#define vec_each(a, it) \
+  for (typeof_unqual((a)->v) it = (a)->v; it && it < (a)->v + (a)->len; it++)
+#define vec_remove(a, i)                            \
+  (memmove(&(a)->v[i], &(a)->v[(i) + 1],            \
+           sizeof(*(a)->v) * ((a)->len - (i) - 1)), \
+   (a)->len--)
+#define vec_insert(a, i, x)                                                   \
+  (vec_reserve(a, 1),                                                         \
+   memmove(&(a)->v[(i) + 1], &(a)->v[i], sizeof(*(a)->v) * ((a)->len - (i))), \
+   (a)->v[i] = (x), (a)->len++)
 
 void civue__buf_put(civue_bytes *b, const void *p, usize n);
-void civue__buf_printf(civue_bytes *b, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+[[gnu::format(printf, 2, 3)]] void civue__buf_printf(civue_bytes *b,
+                                                     const char *fmt, ...);
 char *civue__buf_take(civue_bytes *b);
 #define buf_put civue__buf_put
 #define buf_printf civue__buf_printf
 #define buf_take civue__buf_take
-static inline void buf_puts(civue_bytes *b, const char *s) { civue__buf_put(b, s, strlen(s)); }
-static inline void buf_putc(civue_bytes *b, char c) { vec_push(b, (u8)c); }
 
-/* ========================================================================================================== */
-/* maps, hashing and text.                                                                                    */
-/* ========================================================================================================== */
+static inline void buf_puts(civue_bytes *b, const char *s) {
+  civue__buf_put(b, s, strlen(s));
+}
+
+static inline void buf_putc(civue_bytes *b, char c) {
+  vec_push(b, (u8)c);
+}
+
+/* ========================================================================== */
+/* maps, hashing and text.                                                    */
+/* ========================================================================== */
 
 static inline bool map_get(const civue_map *m, u64 key, u64 *val) {
   const u64 *v = CILO_MAP_GET(m, key);
-  if (v && val) *val = *v;
+  if (v && val) {
+    *val = *v;
+  }
   return v;
 }
-static inline void map_put(civue_map *m, u64 key, u64 val) { *CILO_MAP_PUT(&cilo_heap, m, key) = val; }
-static inline bool map_del(civue_map *m, u64 key) { return CILO_MAP_DEL(m, key); }
-static inline void map_free(civue_map *m) { CILO_MAP_DROP(&cilo_heap, m); }
-static inline void map_clear(civue_map *m) { CILO_MAP_CLEAR(m); }
+
+static inline void map_put(civue_map *m, u64 key, u64 val) {
+  *CILO_MAP_PUT(&cilo_heap, m, key) = val;
+}
+
+static inline bool map_del(civue_map *m, u64 key) {
+  return CILO_MAP_DEL(m, key);
+}
+
+static inline void map_free(civue_map *m) {
+  CILO_MAP_DROP(&cilo_heap, m);
+}
+
+static inline void map_clear(civue_map *m) {
+  CILO_MAP_CLEAR(m);
+}
 
 #define hash_u64 civue_hash_u64
 #define hash_bytes civue_hash
@@ -103,9 +151,9 @@ static inline void map_clear(civue_map *m) { CILO_MAP_CLEAR(m); }
 #define utf8_next civue_utf8_next
 #define utf8_put civue_utf8_put
 
-/* ========================================================================================================== */
-/* geometry, the short names.                                                                                 */
-/* ========================================================================================================== */
+/* ========================================================================== */
+/* geometry, the short names.                                                 */
+/* ========================================================================== */
 
 #define v2 civue_v2
 #define v2_add civue_v2_add
@@ -123,17 +171,31 @@ static inline void map_clear(civue_map *m) { CILO_MAP_CLEAR(m); }
 #define color_hex civue_hex
 #define color_alpha civue_alpha
 
-// names the app after its window's title for the gpu's drivers, unless the app named itself.
+typedef struct civue_ui civue_ui;
+typedef struct civue_tree civue_tree;
+
+// how many times the coverage and the color atlases started over.
+void civue__generations(const civue_ui *ui, u64 out[2]);
+
+// the nodes' solve as a frame ends, true when nothing moved.
+bool civue__tree_end(civue_ui *ui);
+void civue__tree_free(civue_tree *t);
+
+// names the app after its window's title for the gpu's drivers, unless the app
+// named itself.
 void civue__gpu_title(const char *title);
 
-/* ========================================================================================================== */
-/* files.                                                                                                     */
-/* ========================================================================================================== */
+/* ========================================================================== */
+/* files.                                                                     */
+/* ========================================================================== */
 
 bool civue__file_read(const char *path, civue_bytes *out);
-const char *civue__home_dir(void);
+const char *civue__home_dir();
 #define file_read civue__file_read
 #define home_dir civue__home_dir
-static inline char *path_join(const char *a, const char *b) { return civue__xfmt("%s/%s", a, b); }
+
+static inline char *path_join(const char *a, const char *b) {
+  return civue__xfmt("%s/%s", a, b);
+}
 
 #endif

@@ -7,6 +7,7 @@
 #include <civue/gfx.h>
 #include <civue/gpu.h>
 #include <civue/icons.h>
+#include <civue/layout.h>
 #include <civue/numfield.h>
 #include <civue/rich.h>
 #include <civue/system.h>

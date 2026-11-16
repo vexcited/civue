@@ -7,10 +7,11 @@
 extern "C" {
 #endif
 
-/* ========================================================================================================== */
-/* rich text as figma keeps annotation labels and component descriptions: paragraphs, headers, code blocks    */
-/* and list items of runs bold, italic, struck, code or linked, laid out wrapped.                             */
-/* ========================================================================================================== */
+/* ========================================================================== */
+/* rich text as figma keeps annotation labels and component descriptions:     */
+/* paragraphs, headers, code blocks and list items of runs bold, italic,      */
+/* struck, code or linked, laid out wrapped.                                  */
+/* ========================================================================== */
 
 // the format of a byte: its flags, and in the high bits which of the doc's
 // links it belongs to, none for 0.
@@ -24,6 +25,7 @@ enum {
   CIVUE_RICH_FLAGS = 0x0f,
   CIVUE_RICH_MAX_LINKS = 15
 };
+
 typedef enum : uint8_t {
   CIVUE_RICH_PARA,
   CIVUE_RICH_BULLET,
@@ -63,7 +65,8 @@ typedef struct {
   civue_rich_block kind;
 } civue_rich_box;
 
-// the colors a doc is drawn in: its text, its links, the ground under its code, and its selection's while edited.
+// the colors a doc is drawn in: its text, its links, the ground under its code,
+// and its selection's while edited.
 typedef struct {
   civue_color text, link, code, selection;
 } civue_rich_colors;
@@ -80,24 +83,29 @@ typedef struct {
 civue_rich_doc civue_rich_from_html(const char *html);
 void civue_rich_free(civue_rich_doc *d);
 // lays it out wrapped at `width`, the blocks' list indents inside it.
-void civue_rich_layout(civue_ui *ui, const civue_rich_doc *d, civue_text_style style, float width, civue_rich_lay *out);
+void civue_rich_layout(civue_ui *ui, const civue_rich_doc *d,
+                       civue_text_style style, float width,
+                       civue_rich_lay *out);
 void civue_rich_lay_free(civue_rich_lay *l);
 // draws a doc laid out at `origin`: list markers, code grounds, the text.
-void civue_rich_paint(civue_ui *ui, const civue_rich_doc *d, const civue_rich_lay *l, civue_vec2 origin,
+void civue_rich_paint(civue_ui *ui, const civue_rich_doc *d,
+                      const civue_rich_lay *l, civue_vec2 origin,
                       civue_text_style style, civue_rich_colors colors);
 // its size wrapped at `width`, the widest line and the height.
-civue_vec2 civue_rich_measure(civue_ui *ui, const civue_rich_doc *d, civue_text_style style, float width);
+civue_vec2 civue_rich_measure(civue_ui *ui, const civue_rich_doc *d,
+                              civue_text_style style, float width);
 // draws it from `origin`, returning its height.
-float civue_rich_draw(civue_ui *ui, const civue_rich_doc *d, civue_vec2 origin, civue_text_style style, float width,
+float civue_rich_draw(civue_ui *ui, const civue_rich_doc *d, civue_vec2 origin,
+                      civue_text_style style, float width,
                       civue_rich_colors colors);
 
-/* ========================================================================================================== */
-/* editing: the doc's own edits, its html, and an editor with bold and italic on cmd+b and cmd+i, lists and   */
-/* markdown shortcuts as they are typed.                                                                      */
-/* ========================================================================================================== */
+/* ========================================================================== */
+/* editing: the doc's own edits, its html, and an editor with bold and italic */
+/* on cmd+b and cmd+i, lists and markdown shortcuts as they are typed.        */
+/* ========================================================================== */
 
 // a doc of one empty paragraph.
-civue_rich_doc civue_rich_new(void);
+civue_rich_doc civue_rich_new();
 civue_rich_doc civue_rich_clone(const civue_rich_doc *d);
 // no text and no list.
 bool civue_rich_is_empty(const civue_rich_doc *d);
@@ -105,12 +113,14 @@ bool civue_rich_is_empty(const civue_rich_doc *d);
 bool civue_rich_equal(const civue_rich_doc *a, const civue_rich_doc *b);
 // `n` bytes of `s` put in at `at` in format `f`, a newline starting a
 // paragraph.
-void civue_rich_insert(civue_rich_doc *d, uint32_t at, const char *s, size_t n, uint8_t f);
+void civue_rich_insert(civue_rich_doc *d, uint32_t at, const char *s, size_t n,
+                       uint8_t f);
 // the bytes from `from` to `to` taken out, blocks it joins keeping the
 // first's kind.
 void civue_rich_delete(civue_rich_doc *d, uint32_t from, uint32_t to);
 // `f` toggled over the bytes: on everywhere unless every byte has it.
-void civue_rich_toggle(civue_rich_doc *d, uint32_t from, uint32_t to, uint8_t f);
+void civue_rich_toggle(civue_rich_doc *d, uint32_t from, uint32_t to,
+                       uint8_t f);
 // figma's saved label, its html, malloc'd.
 char *civue_rich_to_html(const civue_rich_doc *d);
 // the html of figma's lexical editor as component descriptions keep it:
@@ -133,14 +143,20 @@ typedef struct {
 // an editable doc at `origin`, `width` wide, its keys and the pointer
 // handled while it has the focus. enter is the caller's, shift enter starts
 // a new block like figma's.
-civue_rich_response civue_rich_edit(civue_ui *ui, civue_id id, civue_vec2 origin, float width, civue_rich_doc *d,
-                                    civue_text_style style, civue_rich_colors colors);
+civue_rich_response civue_rich_edit(civue_ui *ui, civue_id id,
+                                    civue_vec2 origin, float width,
+                                    civue_rich_doc *d, civue_text_style style,
+                                    civue_rich_colors colors);
 // the same where enter starts a new block, for a description.
-civue_rich_response civue_rich_edit_multiline(civue_ui *ui, civue_id id, civue_vec2 origin, float width,
-                                              civue_rich_doc *d, civue_text_style style, civue_rich_colors colors);
+civue_rich_response civue_rich_edit_multiline(civue_ui *ui, civue_id id,
+                                              civue_vec2 origin, float width,
+                                              civue_rich_doc *d,
+                                              civue_text_style style,
+                                              civue_rich_colors colors);
 // puts the caret of the editing doc `id` after its text, false while it
 // isn't editing yet.
-bool civue_rich_caret_to_end(civue_ui *ui, civue_id id, const civue_rich_doc *d);
+bool civue_rich_caret_to_end(civue_ui *ui, civue_id id,
+                             const civue_rich_doc *d);
 
 // what a toolbar over the doc being edited does.
 
@@ -156,19 +172,24 @@ typedef enum : uint8_t {
 } civue_rich_action;
 
 // the selection of the doc `id` being edited, false while it is not.
-bool civue_rich_selection(civue_ui *ui, civue_id id, uint32_t *lo, uint32_t *hi);
+bool civue_rich_selection(civue_ui *ui, civue_id id, uint32_t *lo,
+                          uint32_t *hi);
 void civue_rich_select(civue_ui *ui, civue_id id, uint32_t lo, uint32_t hi);
 // whether the action is on where the caret or the selection is.
-bool civue_rich_active(civue_ui *ui, civue_id id, const civue_rich_doc *d, civue_rich_action a);
+bool civue_rich_active(civue_ui *ui, civue_id id, const civue_rich_doc *d,
+                       civue_rich_action a);
 // toggles it there. a format with no selection applies to what is typed
 // next. true when the doc changed.
-bool civue_rich_act(civue_ui *ui, civue_id id, civue_rich_doc *d, civue_rich_action a);
+bool civue_rich_act(civue_ui *ui, civue_id id, civue_rich_doc *d,
+                    civue_rich_action a);
 // links the bytes from `lo` to `hi` to `url`, or takes their link off when
 // it is none.
-void civue_rich_set_link(civue_rich_doc *d, uint32_t lo, uint32_t hi, const char *url);
+void civue_rich_set_link(civue_rich_doc *d, uint32_t lo, uint32_t hi,
+                         const char *url);
 // the url of the link the byte at `at`, or just before it, is in, and the
 // bytes it covers, none when it is in no link.
-const char *civue_rich_link_at(const civue_rich_doc *d, uint32_t at, uint32_t *from, uint32_t *to);
+const char *civue_rich_link_at(const civue_rich_doc *d, uint32_t at,
+                               uint32_t *from, uint32_t *to);
 
 #ifdef __cplusplus
 }

@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdckdint.h>
 #include <pwd.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -14,7 +15,9 @@
 
 static void (*log_hook)(const char *message);
 
-void civue_set_log(void (*log)(const char *message)) { log_hook = log; }
+void civue_set_log(void (*log)(const char *message)) {
+  log_hook = log;
+}
 
 static void say(const char *fmt, va_list ap) {
   if (!log_hook) {
@@ -43,10 +46,12 @@ void civue__log(const char *fmt, ...) {
   va_end(ap);
 }
 
-double civue_now(void) {
+double civue_now() {
 #ifdef __APPLE__
   static mach_timebase_info_data_t tb;
-  if (!tb.denom) mach_timebase_info(&tb);
+  if (!tb.denom) {
+    mach_timebase_info(&tb);
+  }
   return (f64)mach_absolute_time() * tb.numer / tb.denom / 1e9;
 #else
   struct timespec t;
@@ -55,25 +60,31 @@ double civue_now(void) {
 #endif
 }
 
-/* ========================================================================================================== */
-/* memory.                                                                                                    */
-/* ========================================================================================================== */
+/* ========================================================================== */
+/* memory.                                                                    */
+/* ========================================================================== */
 
 void *civue__xmalloc(usize n) {
   void *p = malloc(n ? n : 1);
-  if (!p) die("out of memory allocating %zu bytes", n);
+  if (!p) {
+    die("out of memory allocating %zu bytes", n);
+  }
   return p;
 }
 
 void *civue__xcalloc(usize n, usize size) {
   void *p = calloc(n ? n : 1, size ? size : 1);
-  if (!p) die("out of memory allocating %zu items", n);
+  if (!p) {
+    die("out of memory allocating %zu items", n);
+  }
   return p;
 }
 
 void *civue__xrealloc(void *p, usize n) {
   p = realloc(p, n ? n : 1);
-  if (!p) die("out of memory reallocating %zu bytes", n);
+  if (!p) {
+    die("out of memory reallocating %zu bytes", n);
+  }
   return p;
 }
 
@@ -88,20 +99,30 @@ char *civue__xfmt(const char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
   char *out = nullptr;
-  if (vasprintf(&out, fmt, ap) < 0) die("out of memory formatting");
+  if (vasprintf(&out, fmt, ap) < 0) {
+    die("out of memory formatting");
+  }
   va_end(ap);
   return out;
 }
 
 void civue__vec_grow(void **v, u32 *cap, u32 need, usize item) {
   u32 n = *cap ? *cap : 4;
-  while (n < need) n = n < 0x40000000 ? n * 2 : need;
-  *v = xrealloc(*v, (usize)n * item);
+  while (n < need) {
+    n = n < 0x40000000 ? n * 2 : need;
+  }
+  usize size;
+  if (ckd_mul(&size, (usize)n, item)) {
+    die("%u items of %zu bytes overflow", n, item);
+  }
+  *v = xrealloc(*v, size);
   *cap = n;
 }
 
 void civue__buf_put(civue_bytes *b, const void *p, usize n) {
-  if (!n) return;
+  if (!n) {
+    return;
+  }
   vec_reserve(b, n);
   memcpy(b->v + b->len, p, n);
   b->len += n;
@@ -123,13 +144,13 @@ char *civue__buf_take(civue_bytes *b) {
   vec_reserve(b, 1);
   b->v[b->len] = 0;
   char *s = (char *)b->v;
-  *b = (civue_bytes){0};
+  *b = (civue_bytes){};
   return s ? s : xstrdup("");
 }
 
-/* ========================================================================================================== */
-/* text.                                                                                                      */
-/* ========================================================================================================== */
+/* ========================================================================== */
+/* text.                                                                      */
+/* ========================================================================== */
 
 uint32_t civue_utf8_next(const char *s, size_t n, size_t *i) {
   const u8 *p = (const u8 *)s;
@@ -139,13 +160,17 @@ uint32_t civue_utf8_next(const char *s, size_t n, size_t *i) {
   if (c < 0x80) {
     *i += 1;
     return c;
-  } else if ((c & 0xe0) == 0xc0) {
+  }
+  else if ((c & 0xe0) == 0xc0) {
     cp = c & 0x1f, len = 2;
-  } else if ((c & 0xf0) == 0xe0) {
+  }
+  else if ((c & 0xf0) == 0xe0) {
     cp = c & 0x0f, len = 3;
-  } else if ((c & 0xf8) == 0xf0) {
+  }
+  else if ((c & 0xf8) == 0xf0) {
     cp = c & 0x07, len = 4;
-  } else {
+  }
+  else {
     *i += 1;
     return 0xfffd;
   }
@@ -168,11 +193,13 @@ size_t civue_utf8_put(char out[4], uint32_t cp) {
   if (cp < 0x80) {
     out[0] = cp;
     return 1;
-  } else if (cp < 0x800) {
+  }
+  else if (cp < 0x800) {
     out[0] = 0xc0 | cp >> 6;
     out[1] = 0x80 | (cp & 0x3f);
     return 2;
-  } else if (cp < 0x10000) {
+  }
+  else if (cp < 0x10000) {
     out[0] = 0xe0 | cp >> 12;
     out[1] = 0x80 | ((cp >> 6) & 0x3f);
     out[2] = 0x80 | (cp & 0x3f);
@@ -185,13 +212,15 @@ size_t civue_utf8_put(char out[4], uint32_t cp) {
   return 4;
 }
 
-/* ========================================================================================================== */
-/* files.                                                                                                     */
-/* ========================================================================================================== */
+/* ========================================================================== */
+/* files.                                                                     */
+/* ========================================================================== */
 
 bool civue__file_read(const char *path, civue_bytes *out) {
   int fd = open(path, O_RDONLY);
-  if (fd < 0) return false;
+  if (fd < 0) {
+    return false;
+  }
   struct stat st;
   if (fstat(fd, &st) < 0) {
     close(fd);
@@ -202,23 +231,29 @@ bool civue__file_read(const char *path, civue_bytes *out) {
   for (;;) {
     vec_reserve(out, 65536);
     ssize_t r = read(fd, out->v + out->len, out->cap - out->len);
-    if (r < 0 && errno == EINTR) continue;
+    if (r < 0 && errno == EINTR) {
+      continue;
+    }
     if (r < 0) {
       close(fd);
       return false;
     }
-    if (r == 0) break;
+    if (r == 0) {
+      break;
+    }
     out->len += r;
   }
   close(fd);
   return true;
 }
 
-const char *civue__home_dir(void) {
+const char *civue__home_dir() {
   static const char *home;
   if (!home) {
     const char *h = getenv("HOME");
-    if (!h || !*h) h = getpwuid(getuid())->pw_dir;
+    if (!h || !*h) {
+      h = getpwuid(getuid())->pw_dir;
+    }
     home = xstrdup(h);
   }
   return home;

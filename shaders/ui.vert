@@ -20,7 +20,8 @@ layout(location = 4) in vec4 radii;
 // x is the border width, y the kind, z the blur sigma, text gamma or 1
 // for a pixel grid, w nearest sampling.
 layout(location = 5) in vec4 params;
-// u0, v0, u1, v1.
+// u0, v0, u1, v1, or a rect's border widths from the top clockwise when
+// its border width is negative.
 layout(location = 6) in vec4 uv;
 // cos, sin, pivot x, pivot y of a turn, none when cos and sin are zero.
 layout(location = 7) in vec4 turn;
@@ -33,6 +34,7 @@ layout(location = 4) flat out vec4 o_border;
 layout(location = 5) flat out vec4 o_radii;
 layout(location = 6) flat out vec4 o_params;
 layout(location = 7) out vec2 o_uv;
+layout(location = 8) flat out vec4 o_sides;
 
 const float SHADOW = 1.0;
 
@@ -60,6 +62,7 @@ void main() {
     o_border = border;
     o_radii = radii;
     o_params = params;
+    o_sides = uv;
     vec2 t = (p - rect.xy) / rect.zw;
     o_uv = mix(uv.xy, uv.zw, t);
 }

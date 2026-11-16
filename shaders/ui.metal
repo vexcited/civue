@@ -24,7 +24,8 @@ struct Instance {
     // x is the border width, y the kind, z the blur sigma, text gamma or 1
     // for a pixel grid, w nearest sampling.
     float4 params [[attribute(5)]];
-    // u0, v0, u1, v1.
+    // u0, v0, u1, v1, or a rect's border widths from the top clockwise
+    // when its border width is negative.
     float4 uv [[attribute(6)]];
     // cos, sin, pivot x, pivot y of a turn, none when cos and sin are zero.
     float4 turn [[attribute(7)]];
@@ -39,6 +40,7 @@ struct Out {
     float4 border [[flat]];
     float4 radii [[flat]];
     float4 params [[flat]];
+    float4 sides [[flat]];
     float2 uv;
 };
 
@@ -72,6 +74,7 @@ vertex Out ui_vs(uint vi [[vertex_id]], Instance inst [[stage_in]], constant Glo
     o.border = inst.border;
     o.radii = inst.radii;
     o.params = inst.params;
+    o.sides = inst.uv;
     float2 t = (p - inst.rect.xy) / inst.rect.zw;
     o.uv = mix(inst.uv.xy, inst.uv.zw, t);
     return o;
@@ -220,11 +223,28 @@ fragment float4 ui_fs(
     if (in.params.z > 0.5) {
         return pixel_grid(in.color, p, in.border);
     }
-    if (bw <= 0.0) {
+    if (bw == 0.0) {
         return in.color * outer;
     }
-    float2 inner_half = max(hs - bw, float2(0.0));
-    float inner = clamp(0.5 - sd_rounded(q, inner_half, max(in.radii - bw, float4(0.0))), 0.0, 1.0);
+    float inner;
+    if (bw < 0.0) {
+        // borders of their own width per side, the inner corners rounded by
+        // what the wider of their two sides leaves, as browsers do. a side
+        // without a border has its inner edge a pixel past the outer one, so
+        // their antialiasing doesn't meet.
+        float4 s = select(in.sides, float4(-1.0), in.sides == 0.0);
+        float2 inner_half = max((in.rect.zw - float2(s.w + s.y, s.x + s.z)) * 0.5, float2(0.0));
+        float2 center = in.rect.xy + float2(s.w, s.x) + inner_half;
+        float4 wider = float4(max(s.x, s.w), max(s.x, s.y), max(s.z, s.y), max(s.z, s.w));
+        float4 radii = max(in.radii - wider, float4(0.0));
+        inner = clamp(0.5 - sd_rounded(p - center, inner_half, radii), 0.0, 1.0);
+        if (inner_half.x <= 0.0 || inner_half.y <= 0.0) {
+            inner = 0.0;
+        }
+    } else {
+        float2 inner_half = max(hs - bw, float2(0.0));
+        inner = clamp(0.5 - sd_rounded(q, inner_half, max(in.radii - bw, float4(0.0))), 0.0, 1.0);
+    }
     float4 fill = in.color * inner;
     return (in.border * (1.0 - inner) + fill) * outer;
 }

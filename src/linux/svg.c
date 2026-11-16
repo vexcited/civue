@@ -6,14 +6,22 @@
 #include <librsvg/rsvg.h>
 #include <limits.h>
 
-bool civue_svg_rasterize(const char *svg, usize n, u32 w, u32 h, civue_bytes *rgba) {
-  if (!svg || !rgba || !w || !h || w > INT_MAX || h > INT_MAX || (u64)w * h > UINT32_MAX / 4) return false;
+bool civue_svg_rasterize(const char *svg, usize n, u32 w, u32 h,
+                         civue_bytes *rgba) {
+  if (!svg || !rgba || !w || !h || w > INT_MAX || h > INT_MAX ||
+      (u64)w * h > UINT32_MAX / 4) {
+    return false;
+  }
   RsvgHandle *handle = rsvg_handle_new_from_data((const u8 *)svg, n, nullptr);
-  if (!handle) return false;
-  cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+  if (!handle) {
+    return false;
+  }
+  cairo_surface_t *surface =
+    cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
   cairo_t *cr = cairo_create(surface);
   RsvgRectangle viewport = {0, 0, w, h};
-  bool ok = rsvg_handle_render_document(handle, cr, &viewport, nullptr) && cairo_status(cr) == CAIRO_STATUS_SUCCESS &&
+  bool ok = rsvg_handle_render_document(handle, cr, &viewport, nullptr) &&
+            cairo_status(cr) == CAIRO_STATUS_SUCCESS &&
             cairo_surface_status(surface) == CAIRO_STATUS_SUCCESS;
   if (ok) {
     cairo_surface_flush(surface);

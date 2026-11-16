@@ -16,6 +16,7 @@ layout(location = 4) flat in vec4 i_border;
 layout(location = 5) flat in vec4 i_radii;
 layout(location = 6) flat in vec4 i_params;
 layout(location = 7) in vec2 i_uv;
+layout(location = 8) flat in vec4 i_sides;
 
 layout(location = 0) out vec4 out_color;
 
@@ -170,12 +171,29 @@ void main() {
         out_color = pixel_grid(i_color, p, i_border);
         return;
     }
-    if (bw <= 0.0) {
+    if (bw == 0.0) {
         out_color = i_color * outer;
         return;
     }
-    vec2 inner_half = max(hs - bw, vec2(0.0));
-    float inner = clamp(0.5 - sd_rounded(q, inner_half, max(i_radii - bw, vec4(0.0))), 0.0, 1.0);
+    float inner;
+    if (bw < 0.0) {
+        // borders of their own width per side, the inner corners rounded by
+        // what the wider of their two sides leaves, as browsers do. a side
+        // without a border has its inner edge a pixel past the outer one, so
+        // their antialiasing doesn't meet.
+        vec4 s = mix(i_sides, vec4(-1.0), equal(i_sides, vec4(0.0)));
+        vec2 inner_half = max((i_rect.zw - vec2(s.w + s.y, s.x + s.z)) * 0.5, vec2(0.0));
+        vec2 center = i_rect.xy + vec2(s.w, s.x) + inner_half;
+        vec4 wider = vec4(max(s.x, s.w), max(s.x, s.y), max(s.z, s.y), max(s.z, s.w));
+        vec4 radii = max(i_radii - wider, vec4(0.0));
+        inner = clamp(0.5 - sd_rounded(p - center, inner_half, radii), 0.0, 1.0);
+        if (inner_half.x <= 0.0 || inner_half.y <= 0.0) {
+            inner = 0.0;
+        }
+    } else {
+        vec2 inner_half = max(hs - bw, vec2(0.0));
+        inner = clamp(0.5 - sd_rounded(q, inner_half, max(i_radii - bw, vec4(0.0))), 0.0, 1.0);
+    }
     vec4 fill = i_color * inner;
     out_color = (i_border * (1.0 - inner) + fill) * outer;
     return;
