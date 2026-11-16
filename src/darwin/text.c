@@ -1196,8 +1196,12 @@ static const GlyphEntry *glyph(civue_text_system *t, civue_atlas *mask,
 
 // where a block's glyphs are in the atlas, found once for the fraction of a
 // pixel it is drawn at.
+// a glyph that draws nothing, a space for one.
+constexpr u32 EMPTY = UINT32_MAX;
+
 typedef struct {
-  // the glyph's entry + 1, 0 when it draws nothing.
+  // the glyph's entry + 1, EMPTY, or 0 when it could not be made: it is
+  // asked for again the next time.
   u32 entry;
   u32 sub;
   // whole pixels from the block's origin, floored.
@@ -1212,7 +1216,11 @@ typedef struct {
 static u32 find(civue_text_system *t, civue_atlas *mask, civue_atlas *color,
                 const civue_glyph *g, u32 sub) {
   const GlyphEntry *e = glyph(t, mask, color, g, sub);
-  return e && e->w && e->h ? (u32)(e - t->glyphs.v) + 1 : 0;
+  if (!e) {
+    return 0;
+  }
+
+  return e->w && e->h ? (u32)(e - t->glyphs.v) + 1 : EMPTY;
 }
 
 static Drawn *drawn(civue_text_system *t, civue_atlas *mask, civue_atlas *color,
@@ -1259,16 +1267,16 @@ void civue_text_draw(civue_text_system *t, civue_draw_list *d,
 
   for (u32 i = 0; i < b->nglyphs; i++) {
     Found *f = &found->v[i];
-    if (!f->entry) {
+    if (f->entry == EMPTY) {
       continue;
     }
 
     const civue_glyph *g = &b->glyphs[i];
-    const GlyphEntry *e = &t->glyphs.v[f->entry - 1];
+    const GlyphEntry *e = f->entry ? &t->glyphs.v[f->entry - 1] : nullptr;
     // an atlas that started over since has it somewhere else.
-    if (e->generation != (e->color ? color : mask)->generation) {
+    if (!e || e->generation != (e->color ? color : mask)->generation) {
       f->entry = find(t, mask, color, g, f->sub);
-      if (!f->entry) {
+      if (!f->entry || f->entry == EMPTY) {
         continue;
       }
       e = &t->glyphs.v[f->entry - 1];
