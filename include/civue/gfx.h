@@ -18,7 +18,7 @@ extern "C" {
 
 typedef struct civue_gfx civue_gfx;
 
-// a renderer on `device`, civue_gpu_device or a device the app made:
+// a renderer on `device`, a device the app made or nullptr for the process's:
 // id<MTLDevice> on macos, the const civue_vk_device * of civue_vk on linux.
 civue_gfx *civue_gfx_new(void *device);
 void civue_gfx_free(civue_gfx *g);
@@ -39,6 +39,9 @@ civue_texture civue_gfx_upload_image(civue_gfx *g, uint32_t width,
                                      uint32_t height, const uint8_t *rgba);
 // encodes `list` over `target`, id<MTLTexture> or civue_vk_tex, in the command
 // buffer `cb`, cleared first when `clear` is given.
+// whether every image `list` draws is one civue_gfx_upload_image made, whose
+// pixels never change: a texture the app registered may have been drawn into.
+bool civue_gfx_static(civue_gfx *g, const civue_draw_list *list);
 void civue_gfx_encode(civue_gfx *g, void *cb, void *target, uint32_t width,
                       uint32_t height, const civue_draw_list *list,
                       const civue_color *clear);

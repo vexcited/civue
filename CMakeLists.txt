@@ -339,7 +339,7 @@ if(APPLE)
     $<$<COMPILE_LANGUAGE:OBJC>:-fobjc-arc>)
   target_link_libraries(civue PUBLIC
     "-framework Foundation" "-framework AppKit" "-framework Metal"
-    "-framework QuartzCore" "-framework CoreText"
+    "-framework QuartzCore" "-framework CoreText" "-framework IOSurface"
     "-framework CoreGraphics"
     "-framework CoreFoundation" "-framework UniformTypeIdentifiers" objc)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")

@@ -3,6 +3,7 @@
 #include "darwin.h"
 
 #include <civue/gfx.h>
+#include <civue/gpu.h>
 
 #include <stdatomic.h>
 
@@ -20,7 +21,7 @@ typedef struct {
   _Atomic bool busy;
 } QuadBuffer;
 
-constexpr u32 QUAD_BUFFERS = 4;
+constexpr u32 QUAD_BUFFERS = 3;
 
 struct civue_gfx {
   id<MTLDevice> device;
@@ -34,8 +35,12 @@ struct civue_gfx {
   id<MTLTexture> atlas_texture;
   // made when the first color glyph arrives, most screens have none.
   id<MTLTexture> color_atlas_texture;
+  // whether each is the atlas's own pixels.
+  bool atlas_shared[2];
   id<MTLTexture> dummy;
   NSMutableDictionary<NSNumber *, id<MTLTexture>> *images;
+  // the images civue uploaded itself, whose pixels never change.
+  NSMutableSet<NSNumber *> *uploaded;
   civue_texture next_id;
 };
 
@@ -77,16 +82,42 @@ static id<MTLSamplerState> sampler(id<MTLDevice> device,
   return [device newSamplerStateWithDescriptor:d];
 }
 
+// the device given, or the process's, made when it is first needed: an
+// app whose frames the cpu draws has none.
+static id<MTLDevice> device_of(civue_gfx *g) {
+  if (!g->device) {
+    g->device = (__bridge id<MTLDevice>)civue_gpu_device();
+  }
+
+  return g->device;
+}
+
 civue_gfx *civue_gfx_new(void *device) {
   civue_gfx *g = xcalloc(1, sizeof *g);
   g->device = (__bridge id<MTLDevice>)device;
-  g->queue = [g->device newCommandQueue];
+  g->images = [NSMutableDictionary dictionary];
+  g->uploaded = [NSMutableSet set];
+  g->atlas.bytes_per_pixel = 1;
+  g->color_atlas.bytes_per_pixel = 4;
+  g->atlas.keeps = g->color_atlas.keeps = true;
+  g->next_id = 1;
+  return g;
+}
+
+// what only drawing on the gpu needs, made when a frame first does: an app
+// whose frames are all drawn on the cpu never pays for it.
+static void ready(civue_gfx *g) {
+  if (g->queue) {
+    return;
+  }
+
+  g->queue = [device_of(g) newCommandQueue];
 
   dispatch_data_t data =
     dispatch_data_create(civue_ui_metallib, civue_ui_metallib_len, nullptr,
                          DISPATCH_DATA_DESTRUCTOR_DEFAULT);
   NSError *error = nil;
-  id<MTLLibrary> lib = [g->device newLibraryWithData:data error:&error];
+  id<MTLLibrary> lib = [device_of(g) newLibraryWithData:data error:&error];
 
   if (!lib) {
     die("ui shader: %s", error.localizedDescription.UTF8String);
@@ -95,17 +126,10 @@ civue_gfx *civue_gfx_new(void *device) {
   g->vs = [lib newFunctionWithName:@"ui_vs"];
   g->fs = [lib newFunctionWithName:@"ui_fs"];
   g->pipelines = [NSMutableDictionary dictionary];
-  g->images = [NSMutableDictionary dictionary];
-  g->linear = sampler(g->device, MTLSamplerMinMagFilterLinear);
-  g->nearest = sampler(g->device, MTLSamplerMinMagFilterNearest);
-  g->atlas.bytes_per_pixel = 1;
-  g->color_atlas.bytes_per_pixel = 4;
-  g->atlas_texture = written_texture(g->device, MTLPixelFormatR8Unorm,
-                                     CIVUE_ATLAS_SIZE, CIVUE_ATLAS_SIZE);
-  g->dummy = texture(g->device, MTLPixelFormatRGBA8Unorm, 1, 1,
+  g->linear = sampler(device_of(g), MTLSamplerMinMagFilterLinear);
+  g->nearest = sampler(device_of(g), MTLSamplerMinMagFilterNearest);
+  g->dummy = texture(device_of(g), MTLPixelFormatRGBA8Unorm, 1, 1,
                      MTLTextureUsageShaderRead);
-  g->next_id = 1;
-  return g;
 }
 
 void civue_gfx_free(civue_gfx *g) {
@@ -121,10 +145,11 @@ void civue_gfx_free(civue_gfx *g) {
 }
 
 void *civue_gfx_device(civue_gfx *g) {
-  return (__bridge void *)g->device;
+  return (__bridge void *)device_of(g);
 }
 
 void *civue_gfx_queue(civue_gfx *g) {
+  ready(g);
   return (__bridge void *)g->queue;
 }
 
@@ -173,7 +198,7 @@ static id<MTLRenderPipelineState> pipeline(civue_gfx *g, MTLPixelFormat format,
   att.destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
 
   NSError *error = nil;
-  state = [g->device newRenderPipelineStateWithDescriptor:d error:&error];
+  state = [device_of(g) newRenderPipelineStateWithDescriptor:d error:&error];
 
   if (!state) {
     die("ui pipeline: %s", error.localizedDescription.UTF8String);
@@ -192,17 +217,19 @@ civue_texture civue_gfx_register_texture(civue_gfx *g, void *t) {
 void civue_gfx_update_texture(civue_gfx *g, civue_texture tid, void *t) {
   if (g->images[@(tid)]) {
     g->images[@(tid)] = (__bridge id<MTLTexture>)t;
+    [g->uploaded removeObject:@(tid)];
   }
 }
 
 void civue_gfx_free_texture(civue_gfx *g, civue_texture tid) {
   [g->images removeObjectForKey:@(tid)];
+  [g->uploaded removeObject:@(tid)];
 }
 
 civue_texture civue_gfx_upload_image(civue_gfx *g, u32 w, u32 h,
                                      const u8 *rgba) {
   id<MTLTexture> t =
-    written_texture(g->device, MTLPixelFormatRGBA8Unorm, w, h);
+    written_texture(device_of(g), MTLPixelFormatRGBA8Unorm, w, h);
 
   if (w && h) {
     [t replaceRegion:MTLRegionMake2D(0, 0, w, h)
@@ -211,7 +238,19 @@ civue_texture civue_gfx_upload_image(civue_gfx *g, u32 w, u32 h,
          bytesPerRow:(NSUInteger)w * 4];
   }
 
-  return civue_gfx_register_texture(g, (__bridge void *)t);
+  civue_texture tid = civue_gfx_register_texture(g, (__bridge void *)t);
+  [g->uploaded addObject:@(tid)];
+  return tid;
+}
+
+bool civue_gfx_static(civue_gfx *g, const civue_draw_list *list) {
+  vec_each(&list->batches, b) {
+    if (b->texture && ![g->uploaded containsObject:@(b->texture)]) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 // a free buffer of at least `len` bytes, marked busy, or nullptr when the
@@ -225,9 +264,10 @@ static QuadBuffer *quad_buffer(civue_gfx *g, NSUInteger len) {
     }
 
     if (q->capacity < len) {
-      NSUInteger cap = MAX(len + len / 2, (NSUInteger)64 * 1024);
-      q->buffer = [g->device newBufferWithLength:cap
-                                         options:MTLResourceStorageModeShared];
+      NSUInteger cap = MAX(len + len / 4, (NSUInteger)64 * 1024);
+      q->buffer =
+        [device_of(g) newBufferWithLength:cap
+                                  options:MTLResourceStorageModeShared];
       q->capacity = q->buffer ? cap : 0;
 
       if (!q->buffer) {
@@ -242,25 +282,89 @@ static QuadBuffer *quad_buffer(civue_gfx *g, NSUInteger len) {
   return nullptr;
 }
 
-// the glyphs and icons new this frame.
+// a texture over the pixels an atlas keeps: the gpu reads the memory the
+// cpu writes, with nothing to upload and no second copy. nil when the
+// pixels cannot be shared, which only whole pages are.
+static id<MTLTexture> shared_texture(civue_gfx *g, const civue_atlas *a,
+                                     MTLPixelFormat format) {
+  NSUInteger row = (NSUInteger)CIVUE_ATLAS_SIZE * a->bytes_per_pixel;
+  NSUInteger len = row * CIVUE_ATLAS_SIZE;
+  NSUInteger page = (NSUInteger)getpagesize();
+
+  if ((uintptr_t)a->pixels % page || len % page ||
+      row % [device_of(g) minimumLinearTextureAlignmentForPixelFormat:format]) {
+    return nil;
+  }
+
+  id<MTLBuffer> buffer =
+    [device_of(g) newBufferWithBytesNoCopy:a->pixels
+                                    length:len
+                                   options:MTLResourceStorageModeShared
+                               deallocator:nil];
+  MTLTextureDescriptor *d =
+    [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format
+                                                       width:CIVUE_ATLAS_SIZE
+                                                      height:CIVUE_ATLAS_SIZE
+                                                   mipmapped:NO];
+  d.usage = MTLTextureUsageShaderRead;
+  d.storageMode = MTLStorageModeShared;
+  return [buffer newTextureWithDescriptor:d offset:0 bytesPerRow:row];
+}
+
+// the glyphs and icons the textures don't have yet, from the pixels the
+// atlases keep.
 static void upload_atlases(civue_gfx *g) {
   civue_atlas *atlases[2] = {&g->atlas, &g->color_atlas};
-  id<MTLTexture> textures[2] = {g->atlas_texture, g->color_atlas_texture};
+  id<MTLTexture> __strong *textures[2] = {&g->atlas_texture,
+                                          &g->color_atlas_texture};
+  MTLPixelFormat formats[2] = {MTLPixelFormatR8Unorm, MTLPixelFormatRGBA8Unorm};
 
   for (u32 k = 0; k < 2; k++) {
     civue_atlas *a = atlases[k];
+    NSUInteger row = (NSUInteger)CIVUE_ATLAS_SIZE * a->bytes_per_pixel;
 
-    vec_each(&a->pending, p) {
-      if (p->w && p->h) {
-        [textures[k] replaceRegion:MTLRegionMake2D(p->x, p->y, p->w, p->h)
-                       mipmapLevel:0
-                         withBytes:p->data.v
-                       bytesPerRow:(NSUInteger)p->w * a->bytes_per_pixel];
-      }
-
-      vec_free(&p->data);
+    if (!a->pixels) {
+      continue;
     }
 
+    if (!*textures[k]) {
+      *textures[k] = shared_texture(g, a, formats[k]);
+      g->atlas_shared[k] = *textures[k] != nil;
+    }
+
+    if (g->atlas_shared[k]) {
+      a->stale = false;
+      a->pending.len = 0;
+      continue;
+    }
+
+    // a texture made now has everything to catch up with.
+    if (!*textures[k]) {
+      *textures[k] = written_texture(device_of(g), formats[k], CIVUE_ATLAS_SIZE,
+                                     CIVUE_ATLAS_SIZE);
+      a->stale = true;
+    }
+
+    if (a->stale) {
+      if (a->top) {
+        [*textures[k]
+          replaceRegion:MTLRegionMake2D(0, 0, CIVUE_ATLAS_SIZE, a->top)
+            mipmapLevel:0
+              withBytes:a->pixels
+            bytesPerRow:row];
+      }
+    }
+    else {
+      vec_each(&a->pending, p) {
+        [*textures[k]
+          replaceRegion:MTLRegionMake2D(p->x, p->y, p->w, p->h)
+            mipmapLevel:0
+              withBytes:a->pixels + p->y * row + p->x * a->bytes_per_pixel
+            bytesPerRow:row];
+      }
+    }
+
+    a->stale = false;
     a->pending.len = 0;
   }
 }
@@ -271,12 +375,7 @@ void civue_gfx_encode(civue_gfx *g, void *command_buffer, void *target_texture,
   id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)command_buffer;
   id<MTLTexture> target = (__bridge id<MTLTexture>)target_texture;
 
-  if (g->color_atlas.pending.len && !g->color_atlas_texture) {
-    g->color_atlas_texture =
-      written_texture(g->device, MTLPixelFormatRGBA8Unorm, CIVUE_ATLAS_SIZE,
-                      CIVUE_ATLAS_SIZE);
-  }
-
+  ready(g);
   upload_atlases(g);
 
   MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -313,9 +412,9 @@ void civue_gfx_encode(civue_gfx *g, void *command_buffer, void *target_texture,
       }];
     }
     else {
-      quads = [g->device newBufferWithBytes:list->quads.v
-                                     length:len
-                                    options:MTLResourceStorageModeShared];
+      quads = [device_of(g) newBufferWithBytes:list->quads.v
+                                        length:len
+                                       options:MTLResourceStorageModeShared];
     }
 
     f32 globals[4] = {(f32)width, (f32)height, 0, 0};
@@ -323,7 +422,7 @@ void civue_gfx_encode(civue_gfx *g, void *command_buffer, void *target_texture,
     [enc setVertexBytes:globals length:sizeof globals atIndex:0];
     [enc setFragmentBytes:globals length:sizeof globals atIndex:0];
     [enc setVertexBuffer:quads offset:0 atIndex:QUAD_SLOT];
-    [enc setFragmentTexture:g->atlas_texture atIndex:0];
+    [enc setFragmentTexture:g->atlas_texture ?: g->dummy atIndex:0];
     [enc setFragmentTexture:g->color_atlas_texture ?: g->dummy atIndex:2];
     [enc setFragmentSamplerState:g->linear atIndex:0];
     [enc setFragmentSamplerState:g->nearest atIndex:1];
@@ -357,12 +456,15 @@ void civue_gfx_encode(civue_gfx *g, void *command_buffer, void *target_texture,
 bool civue_gfx_snapshot(civue_gfx *g, const civue_draw_list *list, u32 width,
                         u32 height, civue_color clear, civue_bytes *rgba) {
   @autoreleasepool {
+    ready(g);
+
     id<MTLTexture> target =
-      texture(g->device, MTLPixelFormatRGBA8Unorm, width, height,
+      texture(device_of(g), MTLPixelFormatRGBA8Unorm, width, height,
               MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead);
     NSUInteger row = (NSUInteger)width * 4, len = row * height;
     id<MTLBuffer> buf =
-      [g->device newBufferWithLength:len options:MTLResourceStorageModeShared];
+      [device_of(g) newBufferWithLength:len
+                                options:MTLResourceStorageModeShared];
 
     if (!target || !buf) {
       return false;

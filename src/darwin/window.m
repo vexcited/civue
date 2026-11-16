@@ -1,4 +1,5 @@
 #import <AppKit/AppKit.h>
+#import <IOSurface/IOSurface.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
 
@@ -18,7 +19,8 @@
 @interface CivueStripView : CivuePointerView
 @end
 
-@interface CivueLinkDelegate : NSObject <CAMetalDisplayLinkDelegate>
+@interface CivueLink : NSObject
+- (void)tick:(CADisplayLink *)link;
 @end
 
 @interface CivueAppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate>
@@ -33,9 +35,11 @@ static struct {
   NSApplication *app;
   NSWindow *window;
   CivueView *view;
+  // the gpu's layer, and over it the one showing the frames the cpu draws.
   CAMetalLayer *layer;
-  CAMetalDisplayLink *link;
-  CivueLinkDelegate *link_delegate;
+  CALayer *soft;
+  CADisplayLink *link;
+  CivueLink *link_target;
   CivueAppDelegate *delegate;
   // the title bar's material under the app's title bar.
   NSVisualEffectView *glass;
@@ -74,9 +78,31 @@ static struct {
   NSString *marked;
   // a live resize draws each size at once, in the resize's transaction.
   bool resizing;
-} W = {.window_dark = -1};
 
-static void draw_without_link();
+  // the surfaces the cpu draws frames into, the one shown and the ones it
+  // draws the next into, each missing what the frames since it was drawn
+  // changed. none is shown after a frame the gpu drew.
+  struct {
+    IOSurfaceRef io;
+    civue_damage missing;
+  } surfaces[3];
+
+  int shown;
+  // the surface of the gpu's last frame while it is the one shown, to read
+  // back when the cpu draws the next.
+  IOSurfaceRef gpu_frame;
+  f64 frame_at;
+  bool frame_watched;
+  // when the frame being built began.
+  f64 began;
+  // how many frames in a row the cpu took too long to draw, when the last
+  // did, and when the gpu last drew.
+  u32 slow;
+  f64 slow_at, gpu_at;
+} W = {.window_dark = -1, .shown = -1};
+
+static void draw_now();
+static void start_link();
 
 static void want() {
   W.wanted = true;
@@ -89,7 +115,10 @@ static void want() {
     W.queued = true;
     dispatch_async(dispatch_get_main_queue(), ^{
       W.queued = false;
-      draw_without_link();
+
+      if (!W.link) {
+        draw_now();
+      }
     });
   }
 }
@@ -126,6 +155,11 @@ static void fit_layer(CAMetalLayer *layer, NSView *view) {
   layer.contentsScale = s;
   layer.drawableSize = CGSizeMake(fmax(round(b.size.width * s), 1),
                                   fmax(round(b.size.height * s), 1));
+
+  if (layer == W.layer) {
+    W.soft.contentsScale = s;
+    W.soft.frame = layer.bounds;
+  }
 }
 
 // places the traffic lights in the app's title bar: the close button 12
@@ -245,15 +279,390 @@ static void set_cursor(civue_cursor c) {
 }
 
 static void schedule_timer(f64 at);
-static void draw_strip(id<MTLCommandBuffer> cb, civue_ui *ui);
+static void draw_strip(id<MTLCommandBuffer> cb, const civue_draw_list *list);
 static f64 bar_height();
 
-// builds a frame into `texture` and shows `drawable`.
-static void frame(id<MTLTexture> texture, id<CAMetalDrawable> drawable) {
+// a frame the cpu would take this many pixels' fill to draw goes to the gpu.
+constexpr u64 COSTLY = 32'000'000;
+// so do the frames of an animation that take more than this much of a
+// refresh, most of it drawing, from the third in a row.
+constexpr f64 TOO_LONG = 0.75;
+constexpr u32 IN_A_ROW = 3;
+// frames this far apart are not in a row.
+constexpr f64 APART = 0.05;
+
+// who draws a frame: the gpu, or the cpu over the frame shown, over the
+// gpu's last frame read back, or all of it anew.
+typedef enum {
+  BY_GPU,
+  OVER_SHOWN,
+  OVER_GPU,
+  ANEW
+} Drawer;
+
+static bool sized(IOSurfaceRef io, u32 pw, u32 ph) {
+  return io && IOSurfaceGetWidth(io) == pw && IOSurfaceGetHeight(io) == ph;
+}
+
+static void drop_gpu_frame() {
+  if (W.gpu_frame) {
+    CFRelease(W.gpu_frame);
+    W.gpu_frame = nullptr;
+  }
+}
+
+// frees the surfaces but the one shown, or that one too.
+static void drop_surfaces(bool shown_too) {
+  for (int i = 0; i < (int)countof(W.surfaces); i++) {
+    if (W.surfaces[i].io && (shown_too || i != W.shown)) {
+      CFRelease(W.surfaces[i].io);
+      W.surfaces[i].io = nullptr;
+    }
+  }
+
+  if (shown_too) {
+    W.shown = -1;
+  }
+}
+
+// how long a frame may take: a part of the display's refresh.
+static f64 time_allowed() {
+  NSScreen *screen = W.window.screen;
+  f64 hz = screen ? (f64)screen.maximumFramesPerSecond : 60;
+
+  return TOO_LONG / (hz > 0 ? hz : 60);
+}
+
+// who draws what changed of `list`. the gpu's driver keeps over a hundred
+// megabytes around while it is given work, and for seconds after, so the
+// cpu draws every frame it can and has the time to.
+static Drawer drawer(const civue_draw_list *list, const civue_damage *changes,
+                     u32 pw, u32 ph) {
+  if (W.strip_shown) {
+    return BY_GPU;
+  }
+
+  f64 now = now_s();
+
+  // an animation the cpu was too slow for stays with the gpu until it
+  // stops.
+  if (now - W.gpu_at < APART && W.slow >= IN_A_ROW) {
+    return BY_GPU;
+  }
+
+  u64 cost;
+
+  if (!civue_raster_cost(list, changes, pw, ph, &cost)) {
+    return BY_GPU;
+  }
+
+  Drawer by = OVER_SHOWN;
+
+  // with no frame of its own shown the cpu starts from the gpu's last one,
+  // or anew.
+  if (W.shown < 0 || !sized(W.surfaces[W.shown].io, pw, ph)) {
+    civue_damage all = {.all = true};
+    u64 anew;
+
+    if (civue_raster_cost(list, &all, pw, ph, &anew)) {
+      by = ANEW;
+      cost = anew;
+    }
+    else if (sized(W.gpu_frame, pw, ph)) {
+      by = OVER_GPU;
+    }
+    else {
+      return BY_GPU;
+    }
+  }
+
+  if (cost > COSTLY) {
+    return BY_GPU;
+  }
+
+  if (W.slow >= IN_A_ROW && now - W.slow_at < APART) {
+    return BY_GPU;
+  }
+
+  return by;
+}
+
+static IOSurfaceRef make_surface(u32 pw, u32 ph) {
+  // the window server shows nothing of a surface whose rows are not a
+  // multiple of 16 bytes long: with rows as long as the width, one in two
+  // widths of a resize came out blank.
+  usize stride = IOSurfaceAlignProperty(kIOSurfaceBytesPerRow, (usize)pw * 4);
+
+  NSDictionary *properties = @{
+    (id)kIOSurfaceWidth : @(pw),
+    (id)kIOSurfaceHeight : @(ph),
+    (id)kIOSurfaceBytesPerElement : @4,
+    (id)kIOSurfaceBytesPerRow : @(stride),
+    (id)kIOSurfaceAllocSize : @(stride * ph),
+    (id)kIOSurfacePixelFormat : @((u32)'BGRA'),
+  };
+  IOSurfaceRef io = IOSurfaceCreate((__bridge CFDictionaryRef)properties);
+
+  if (!io) {
+    die("no memory for %u by %u pixels", pw, ph);
+  }
+
+  // srgb, as the gpu's layer shows its frames: an untagged surface would
+  // be shown in the display's own colors.
+  static CFTypeRef srgb;
+
+  if (!srgb) {
+    CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    srgb = CGColorSpaceCopyPropertyList(space);
+    CGColorSpaceRelease(space);
+  }
+
+  IOSurfaceSetValue(io, kIOSurfaceColorSpace, srgb);
+  return io;
+}
+
+// a surface to draw the next frame into: not the one shown, nor one the
+// window server may still be reading.
+static int free_surface(u32 pw, u32 ph) {
+  int empty = -1, busy = -1;
+
+  for (int i = 0; i < (int)countof(W.surfaces); i++) {
+    if (i == W.shown) {
+      continue;
+    }
+
+    if (!W.surfaces[i].io) {
+      empty = i;
+    }
+    else if (!IOSurfaceIsInUse(W.surfaces[i].io)) {
+      return i;
+    }
+    else {
+      busy = i;
+    }
+  }
+
+  if (empty < 0) {
+    return busy;
+  }
+
+  W.surfaces[empty].io = make_surface(pw, ph);
+  W.surfaces[empty].missing = (civue_damage){.all = true};
+  return empty;
+}
+
+// copies a surface to another of the same size.
+static void copy_whole(IOSurfaceRef from, IOSurfaceRef to) {
+  IOSurfaceLock(from, kIOSurfaceLockReadOnly, nullptr);
+
+  const u8 *src = IOSurfaceGetBaseAddress(from);
+  u8 *dst = IOSurfaceGetBaseAddress(to);
+  usize src_stride = IOSurfaceGetBytesPerRow(from);
+  usize dst_stride = IOSurfaceGetBytesPerRow(to);
+  usize width = IOSurfaceGetWidth(to) * 4, height = IOSurfaceGetHeight(to);
+
+  for (usize y = 0; y < height; y++) {
+    memcpy(dst + y * dst_stride, src + y * src_stride, width);
+  }
+
+  IOSurfaceUnlock(from, kIOSurfaceLockReadOnly, nullptr);
+}
+
+// how long a still window keeps the surfaces it does not show.
+constexpr f64 KEPT_FOR = 2;
+
+// frees them once the window stopped drawing.
+static void watch_frame() {
+  if (W.frame_watched) {
+    return;
+  }
+
+  W.frame_watched = true;
+
+  NSTimer *timer =
+    [NSTimer timerWithTimeInterval:KEPT_FOR
+                           repeats:NO
+                             block:^(NSTimer *) {
+                               W.frame_watched = false;
+
+                               if (now_s() - W.frame_at < KEPT_FOR - 0.1) {
+                                 watch_frame();
+                                 return;
+                               }
+
+                               drop_surfaces(false);
+                             }];
+  [NSRunLoop.mainRunLoop addTimer:timer forMode:NSRunLoopCommonModes];
+}
+
+// draws what changed on the cpu, into a surface of the window's own that
+// the layer over the gpu's then shows.
+static void draw_on_cpu(Drawer by, const civue_draw_list *list,
+                        civue_color background, civue_damage changes, u32 pw,
+                        u32 ph) {
+  f64 drawing = now_s();
+
+  if (W.shown >= 0 && !sized(W.surfaces[W.shown].io, pw, ph)) {
+    drop_surfaces(true);
+  }
+
+  int at = free_surface(pw, ph);
+  IOSurfaceRef io = W.surfaces[at].io;
+
+  IOSurfaceLock(io, 0, nullptr);
+
+  // what the surface misses of the frames since it was drawn is drawn
+  // again with what changed, when that is not all of it.
+  civue_damage drawn = {.all = true};
+
+  if (by == OVER_GPU) {
+    copy_whole(W.gpu_frame, io);
+    drawn = changes;
+  }
+  else if (by == OVER_SHOWN && !changes.all) {
+    drawn = W.surfaces[at].missing;
+
+    // a surface that misses everything starts as the one shown.
+    if (drawn.all) {
+      copy_whole(W.surfaces[W.shown].io, io);
+      drawn = changes;
+    }
+    else {
+      civue_damage_join(&drawn, &changes);
+    }
+  }
+
+  civue_surface pixels = {IOSurfaceGetBaseAddress(io), pw, ph,
+                          IOSurfaceGetBytesPerRow(io)};
+  civue_raster(&pixels, list, background, &drawn, civue_gfx_atlas(W.gfx),
+               civue_gfx_color_atlas(W.gfx));
+  IOSurfaceUnlock(io, 0, nullptr);
+
+  for (int i = 0; i < (int)countof(W.surfaces); i++) {
+    civue_damage_join(&W.surfaces[i].missing, &changes);
+  }
+
+  W.surfaces[at].missing = (civue_damage){};
+  W.shown = at;
+  drop_gpu_frame();
+
+  [CATransaction begin];
+  [CATransaction setDisableActions:YES];
+  W.soft.contents = (__bridge id)io;
+  W.soft.hidden = NO;
+  [CATransaction commit];
+
+  // an animation the cpu is too slow for is the gpu's: its frames come
+  // late, and the drawing is what takes the time. a resize's frames are
+  // drawn as its sizes come, late for none.
+  f64 now = now_s();
+  f64 whole = now - W.began;
+
+  if (W.resizing || whole <= time_allowed() || (now - drawing) * 2 < whole) {
+    W.slow = 0;
+  }
+  else {
+    W.slow = now - W.slow_at < APART ? W.slow + 1 : 1;
+    W.slow_at = now;
+  }
+}
+
+// draws the whole frame on the gpu.
+static void draw_on_gpu(const civue_draw_list *list, civue_color background,
+                        u32 pw, u32 ph) {
+  if (!W.layer.device) {
+    W.layer.device = (__bridge id<MTLDevice>)civue_gfx_device(W.gfx);
+  }
+
+  bool synced = W.resizing || !W.soft.hidden;
+
+  if (W.layer.presentsWithTransaction != synced) {
+    W.layer.presentsWithTransaction = synced;
+  }
+
+  id<CAMetalDrawable> drawable = [W.layer nextDrawable];
+  id<MTLTexture> texture = drawable.texture;
+
+  // none, or one of the window's old size that would be stretched: the
+  // frame is drawn again.
+  if (!drawable || texture.width != pw || texture.height != ph) {
+    civue_frame_forget(W.ui);
+    want();
+    return;
+  }
+
+  id<MTLCommandQueue> queue = (__bridge id)civue_gfx_queue(W.gfx);
+  id<MTLCommandBuffer> cb = [queue commandBuffer];
+  civue_gfx_encode(W.gfx, (__bridge void *)cb, (__bridge void *)texture, pw, ph,
+                   list, &background);
+  draw_strip(cb, list);
+
+  if (synced) {
+    // shown with the transaction: the layer of the cpu's frames goes away
+    // with it, and a resized frame comes with the window's new size.
+    [cb commit];
+    [cb waitUntilScheduled];
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    [drawable present];
+    W.soft.hidden = YES;
+    W.soft.contents = nil;
+    [CATransaction commit];
+  }
+  else {
+    [cb presentDrawable:drawable];
+    [cb commit];
+  }
+
+  drop_surfaces(true);
+  drop_gpu_frame();
+
+  IOSurfaceRef io = texture.iosurface;
+
+  if (io) {
+    W.gpu_frame = (IOSurfaceRef)CFRetain(io);
+  }
+
+  W.gpu_at = now_s();
+}
+
+static void present(civue_color background, u32 pw, u32 ph) {
+  civue_damage changes;
+  const civue_draw_list *list =
+    civue_frame_changes(W.ui, background, pw, ph, &changes);
+
+  // an image the app registered may have been drawn into since.
+  if (W.strip_shown || !civue_gfx_static(W.gfx, list)) {
+    changes = (civue_damage){.all = true};
+  }
+
+  // the window shows this frame already.
+  if (!changes.all && !changes.any) {
+    return;
+  }
+
+  W.frame_at = now_s();
+  watch_frame();
+
+  Drawer by = drawer(list, &changes, pw, ph);
+
+  if (by == BY_GPU) {
+    draw_on_gpu(list, background, pw, ph);
+  }
+  else {
+    draw_on_cpu(by, list, background, changes, pw, ph);
+  }
+}
+
+// builds a frame and shows it.
+static void frame() {
   @autoreleasepool {
+    W.began = now_s();
+
     f32 scale = scale_factor();
-    u32 pw = (u32)texture.width;
-    u32 ph = (u32)texture.height;
+    CGSize size = W.layer.drawableSize;
+    u32 pw = (u32)size.width;
+    u32 ph = (u32)size.height;
     civue_ui *ui = W.ui;
     civue_color background = W.app_cb.background
                                ? W.app_cb.background(W.app_cb.ctx)
@@ -296,26 +705,7 @@ static void frame(id<MTLTexture> texture, id<CAMetalDrawable> drawable) {
     // a frame that never settled is shown as it is, the next one is new.
     ui->settled = true;
 
-    id<MTLCommandQueue> queue = (__bridge id)civue_gfx_queue(W.gfx);
-    id<MTLCommandBuffer> cb = [queue commandBuffer];
-    civue_gfx_encode(W.gfx, (__bridge void *)cb, (__bridge void *)texture, pw,
-                     ph, civue_frame_list(ui), &background);
-    draw_strip(cb, ui);
-
-    // presented with the transaction, the frame shows with the window's
-    // new size instead of after it.
-    bool synced = W.resizing;
-
-    if (!synced) {
-      [cb presentDrawable:drawable];
-    }
-
-    [cb commit];
-
-    if (synced) {
-      [cb waitUntilScheduled];
-      [drawable present];
-    }
+    present(background, pw, ph);
 
     if (!W.cursor_set || ui->cursor.kind != W.cursor.kind ||
         ui->cursor.angle != W.cursor.angle) {
@@ -354,25 +744,14 @@ static void frame(id<MTLTexture> texture, id<CAMetalDrawable> drawable) {
 
 // ---- display link ----
 
-// shows a frame in the next drawable, unless it is of the window's old size.
-static void show(id<CAMetalDrawable> drawable) {
-  CGSize want_size = W.layer.drawableSize;
-  id<MTLTexture> texture = drawable.texture;
+@implementation CivueLink
 
-  // a drawable of the old size would be stretched.
-  if (texture.width != (NSUInteger)want_size.width ||
-      texture.height != (NSUInteger)want_size.height) {
-    want();
+- (void)tick:(CADisplayLink *)link {
+  // a live resize draws its frames itself, with the window's new sizes.
+  if (W.resizing) {
     return;
   }
 
-  frame(texture, drawable);
-}
-
-@implementation CivueLinkDelegate
-
-- (void)metalDisplayLink:(CAMetalDisplayLink *)link
-             needsUpdate:(CAMetalDisplayLinkUpdate *)update {
   if (!W.wanted) {
     // nothing to show, the link sleeps until a frame is wanted, not at
     // once since the next frame is often about to be.
@@ -385,51 +764,23 @@ static void show(id<CAMetalDrawable> drawable) {
 
   W.idle = 0;
   W.wanted = false;
-
-  id<CAMetalDrawable> drawable = update.drawable;
-
-  if (drawable) {
-    show(drawable);
-  }
+  frame();
 }
 
 @end
 
-// draws a frame wanted before the display link exists, waiting for a free
-// drawable.
-static void draw_without_link() {
+// draws a wanted frame at once, without waiting for the display.
+static void draw_now() {
   if (!W.wanted) {
     return;
   }
 
-  // a frame queued before the link existed is the link's to draw now, the
-  // layer refuses nextDrawable once a link drives it.
-  if (W.link) {
-    W.idle = 0;
-    W.link.paused = NO;
-    return;
-  }
-
   W.wanted = false;
-
-  @autoreleasepool {
-    id<CAMetalDrawable> drawable = [W.layer nextDrawable];
-
-    if (drawable) {
-      show(drawable);
-    }
-  }
+  frame();
 }
 
-// drives frames as fast as the display goes, a frame ahead.
-static void start_link() {
-  if (!W.link_delegate) {
-    W.link_delegate = [CivueLinkDelegate new];
-  }
-
-  W.link = [[CAMetalDisplayLink alloc] initWithMetalLayer:W.layer];
-  W.link.delegate = W.link_delegate;
-
+// asks for frames as fast as the window's display goes.
+static void pace_link() {
   NSScreen *screen = W.window.screen;
   float hz = screen ? (float)screen.maximumFramesPerSecond : 120;
 
@@ -438,8 +789,14 @@ static void start_link() {
   }
 
   W.link.preferredFrameRateRange = CAFrameRateRangeMake(fminf(hz, 60), hz, hz);
-  W.link.preferredFrameLatency = 1;
-  W.link.paused = YES;
+}
+
+static void start_link() {
+  W.link_target = [CivueLink new];
+  W.link = [W.view displayLinkWithTarget:W.link_target
+                                selector:@selector(tick:)];
+  pace_link();
+  W.link.paused = !W.wanted;
   [W.link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
 }
 
@@ -716,8 +1073,7 @@ static NSString *string_of(id s) {
 
 // the display link would show a resized frame a refresh late, the old one
 // stretched to the new size meanwhile, so a live resize or a move in and out
-// of full screen draws without it. the layer gives no drawables while a link
-// drives it, even paused.
+// of full screen draws each size at once, in the resize's transaction.
 static void sync_resizes(bool on) {
   if (W.resizing == on) {
     return;
@@ -725,15 +1081,7 @@ static void sync_resizes(bool on) {
 
   W.resizing = on;
 
-  if (on && W.link) {
-    [W.link invalidate];
-    W.link = nil;
-  }
-
-  W.layer.presentsWithTransaction = on;
-
   if (!on) {
-    start_link();
     want();
   }
 }
@@ -754,7 +1102,7 @@ static void sync_resizes(bool on) {
   want();
 
   if (W.resizing) {
-    draw_without_link();
+    draw_now();
   }
 }
 
@@ -763,7 +1111,7 @@ static void sync_resizes(bool on) {
   want();
 
   if (W.resizing) {
-    draw_without_link();
+    draw_now();
   }
 }
 
@@ -1069,7 +1417,7 @@ static void make_strip() {
 }
 
 // the top of the ui into the strip.
-static void draw_strip(id<MTLCommandBuffer> cb, civue_ui *ui) {
+static void draw_strip(id<MTLCommandBuffer> cb, const civue_draw_list *list) {
   if (!W.strip_shown) {
     return;
   }
@@ -1085,8 +1433,7 @@ static void draw_strip(id<MTLCommandBuffer> cb, civue_ui *ui) {
   id<MTLTexture> texture = drawable.texture;
   civue_color clear = {};
   civue_gfx_encode(W.gfx, (__bridge void *)cb, (__bridge void *)texture,
-                   (u32)texture.width, (u32)texture.height,
-                   civue_frame_list(ui), &clear);
+                   (u32)texture.width, (u32)texture.height, list, &clear);
   [cb presentDrawable:drawable];
 }
 
@@ -1155,7 +1502,7 @@ static void exiting_full_screen() {
   place_glass();
   // the animation starts from this frame.
   want();
-  draw_without_link();
+  draw_now();
 }
 
 static void exited_full_screen() {
@@ -1180,6 +1527,11 @@ static void exited_full_screen() {
   want();
 }
 
+// another display may go faster or slower.
+- (void)windowDidChangeScreen:(NSNotification *)note {
+  pace_link();
+}
+
 - (void)windowDidResignKey:(NSNotification *)note {
   W.input.held.len = 0;
   memset(W.input.down, 0, sizeof W.input.down);
@@ -1197,7 +1549,7 @@ static void exited_full_screen() {
   lift_view(true);
   // the animation starts from this frame.
   want();
-  draw_without_link();
+  draw_now();
 }
 
 - (void)windowDidEnterFullScreen:(NSNotification *)note {
@@ -1241,17 +1593,28 @@ void civue_window_run_sized(const civue_window_options *o,
       o->install_menus();
     }
 
-    id<MTLDevice> device = (__bridge id<MTLDevice>)civue_gpu_device();
-    W.gfx = civue_gfx_new((__bridge void *)device);
+    // the gpu's device is made when a frame first needs it.
+    W.gfx = civue_gfx_new(nullptr);
     W.layer = [CAMetalLayer layer];
-    W.layer.device = device;
     // blending happens on srgb encoded values like browsers do, and the
     // layer shows them as srgb.
     W.layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-    W.layer.framebufferOnly = YES;
+    // the cpu reads the gpu's frames back.
+    W.layer.framebufferOnly = NO;
     W.layer.opaque = YES;
-    W.layer.maximumDrawableCount = 3;
+    W.layer.maximumDrawableCount = 2;
     W.layer.allowsNextDrawableTimeout = NO;
+
+    W.soft = [CALayer layer];
+    W.soft.opaque = YES;
+    W.soft.hidden = YES;
+    W.soft.actions = @{
+      @"contents" : NSNull.null,
+      @"hidden" : NSNull.null,
+      @"bounds" : NSNull.null,
+      @"position" : NSNull.null,
+    };
+    [W.layer addSublayer:W.soft];
 
     NSWindowStyleMask style =
       NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
@@ -1296,6 +1659,7 @@ void civue_window_run_sized(const civue_window_options *o,
       W.view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
       [content addSubview:W.view];
       W.layer.opaque = NO;
+      W.soft.opaque = NO;
     }
 
     W.window.contentView = content;
@@ -1319,11 +1683,19 @@ void civue_window_run_sized(const civue_window_options *o,
     W.ui->system_dark = system_dark();
     W.app_cb = make(W.ui, arg);
 
+    [W.window makeKeyAndOrderFront:nil];
+
+    // the first frame is drawn before the app runs and the window is sent
+    // to the window server with it, instead of once the app has finished
+    // launching, tens of milliseconds later. a second frame the first asks
+    // for follows at once.
+    W.wanted = true;
+    draw_now();
+    [CATransaction flush];
+    draw_now();
     start_link();
 
-    [W.window makeKeyAndOrderFront:nil];
     [W.app activate];
-    want();
   }
 
   [W.app run];
