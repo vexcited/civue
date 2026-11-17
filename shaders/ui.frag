@@ -17,6 +17,8 @@ layout(location = 5) flat in vec4 i_radii;
 layout(location = 6) flat in vec4 i_params;
 layout(location = 7) in vec2 i_uv;
 layout(location = 8) flat in vec4 i_sides;
+layout(location = 9) flat in vec4 i_round;
+layout(location = 10) flat in vec4 i_round_radii;
 
 layout(location = 0) out vec4 out_color;
 
@@ -106,42 +108,36 @@ float shadow(vec2 local, vec4 rect, float sigma, float corner) {
     return v;
 }
 
-void main() {
+vec4 shade() {
     vec2 p = i_local;
     if (p.x < i_clip.x || p.y < i_clip.y || p.x >= i_clip.z || p.y >= i_clip.w) {
         discard;
     }
     float kind = i_params.y;
     if (kind == SHADOW) {
-        out_color = i_color * shadow(p, i_rect, max(i_params.z, 0.01), i_radii.x);
-        return;
+        return i_color * shadow(p, i_rect, max(i_params.z, 0.01), i_radii.x);
     }
     if (kind == MASK) {
         float a = textureLod(sampler2D(mask_atlas, nearest_sampler), i_uv, 0.0).r;
         // a gamma under 1 thickens light text on dark backgrounds, like
         // browsers adjust text contrast.
         a = pow(a, i_params.z);
-        out_color = i_color * a;
-        return;
+        return i_color * a;
     }
     if (kind == COLOR_GLYPH) {
         // color glyphs keep their colors, premultiplied, and only fade.
-        out_color = textureLod(sampler2D(color_atlas, linear_sampler), i_uv, 0.0) * i_color.a;
-        return;
+        return textureLod(sampler2D(color_atlas, linear_sampler), i_uv, 0.0) * i_color.a;
     }
     if (kind == IMAGE) {
         vec4 c = i_params.w > 0.5 ? textureLod(sampler2D(image, nearest_sampler), i_uv, 0.0) : textureLod(sampler2D(image, linear_sampler), i_uv, 0.0);
         if (i_params.z > 0.5) {
-            out_color = pixel_grid(c, p, i_border);
-            return;
+            return pixel_grid(c, p, i_border);
         }
         // canvas tiles cover their pixels whole, so neighbors meet seamlessly.
         if (i_params.x > 0.5) {
-            out_color = c * i_color.a;
-            return;
+            return c * i_color.a;
         }
-        out_color = c * i_color.a * coverage(p, i_rect, i_radii);
-        return;
+        return c * i_color.a * coverage(p, i_rect, i_radii);
     }
     if (kind == LINE) {
         // radii holds the segment's ends, params.x its width.
@@ -153,13 +149,11 @@ void main() {
             float along = dot(p - a, ab) / len;
             float across = abs(ab.x * (p.y - a.y) - ab.y * (p.x - a.x)) / len;
             float ends = clamp(min(along, len - along) + 0.5, 0.0, 1.0);
-            out_color = i_color * clamp(i_params.x * 0.5 + 0.5 - across, 0.0, 1.0) * ends;
-            return;
+            return i_color * clamp(i_params.x * 0.5 + 0.5 - across, 0.0, 1.0) * ends;
         }
         float t = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
         float d = length(p - a - ab * t);
-        out_color = i_color * clamp(i_params.x * 0.5 + 0.5 - d, 0.0, 1.0);
-        return;
+        return i_color * clamp(i_params.x * 0.5 + 0.5 - d, 0.0, 1.0);
     }
     // a rounded rect with an inside border.
     vec2 hs = i_rect.zw * 0.5;
@@ -168,12 +162,10 @@ void main() {
     float outer = clamp(0.5 - d, 0.0, 1.0);
     float bw = i_params.x;
     if (i_params.z > 0.5) {
-        out_color = pixel_grid(i_color, p, i_border);
-        return;
+        return pixel_grid(i_color, p, i_border);
     }
     if (bw == 0.0) {
-        out_color = i_color * outer;
-        return;
+        return i_color * outer;
     }
     float inner;
     if (bw < 0.0) {
@@ -195,6 +187,14 @@ void main() {
         inner = clamp(0.5 - sd_rounded(q, inner_half, max(i_radii - bw, vec4(0.0))), 0.0, 1.0);
     }
     vec4 fill = i_color * inner;
-    out_color = (i_border * (1.0 - inner) + fill) * outer;
-    return;
+    return (i_border * (1.0 - inner) + fill) * outer;
+}
+
+void main() {
+    vec4 c = shade();
+    // a rounded clip cuts the corners its rect clip leaves.
+    if (max(max(i_round_radii.x, i_round_radii.y), max(i_round_radii.z, i_round_radii.w)) > 0.0) {
+        c *= coverage(i_local, i_round, i_round_radii);
+    }
+    out_color = c;
 }

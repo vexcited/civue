@@ -29,6 +29,10 @@ struct Instance {
     float4 uv [[attribute(6)]];
     // cos, sin, pivot x, pivot y of a turn, none when cos and sin are zero.
     float4 turn [[attribute(7)]];
+    // x, y, width, height of a rounded clip, then its radii, none when
+    // zero.
+    float4 round_rect [[attribute(8)]];
+    float4 round_radii [[attribute(9)]];
 };
 
 struct Out {
@@ -41,6 +45,8 @@ struct Out {
     float4 radii [[flat]];
     float4 params [[flat]];
     float4 sides [[flat]];
+    float4 round_rect [[flat]];
+    float4 round_radii [[flat]];
     float2 uv;
 };
 
@@ -75,6 +81,8 @@ vertex Out ui_vs(uint vi [[vertex_id]], Instance inst [[stage_in]], constant Glo
     o.radii = inst.radii;
     o.params = inst.params;
     o.sides = inst.uv;
+    o.round_rect = inst.round_rect;
+    o.round_radii = inst.round_radii;
     float2 t = (p - inst.rect.xy) / inst.rect.zw;
     o.uv = mix(inst.uv.xy, inst.uv.zw, t);
     return o;
@@ -160,13 +168,13 @@ static float shadow(float2 local, float4 rect, float sigma, float corner) {
     return v;
 }
 
-fragment float4 ui_fs(
-    Out in [[stage_in]],
-    texture2d<float> mask_atlas [[texture(0)]],
-    texture2d<float> image [[texture(1)]],
-    texture2d<float> color_atlas [[texture(2)]],
-    sampler linear_sampler [[sampler(0)]],
-    sampler nearest_sampler [[sampler(1)]]
+static float4 shade(
+    Out in,
+    texture2d<float> mask_atlas,
+    texture2d<float> image,
+    texture2d<float> color_atlas,
+    sampler linear_sampler,
+    sampler nearest_sampler
 ) {
     float2 p = in.local;
     if (p.x < in.clip.x || p.y < in.clip.y || p.x >= in.clip.z || p.y >= in.clip.w) {
@@ -247,4 +255,20 @@ fragment float4 ui_fs(
     }
     float4 fill = in.color * inner;
     return (in.border * (1.0 - inner) + fill) * outer;
+}
+
+fragment float4 ui_fs(
+    Out in [[stage_in]],
+    texture2d<float> mask_atlas [[texture(0)]],
+    texture2d<float> image [[texture(1)]],
+    texture2d<float> color_atlas [[texture(2)]],
+    sampler linear_sampler [[sampler(0)]],
+    sampler nearest_sampler [[sampler(1)]]
+) {
+    float4 c = shade(in, mask_atlas, image, color_atlas, linear_sampler, nearest_sampler);
+    // a rounded clip cuts the corners its rect clip leaves.
+    if (max(max(in.round_radii.x, in.round_radii.y), max(in.round_radii.z, in.round_radii.w)) > 0.0) {
+        c *= coverage(in.local, in.round_rect, in.round_radii);
+    }
+    return c;
 }

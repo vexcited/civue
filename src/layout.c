@@ -74,7 +74,7 @@ typedef struct {
   f32 lh_rel;
   civue_color color;
   civue_text_align align;
-  bool nowrap, truncate, clip, scroll, overlay, quiet;
+  bool nowrap, truncate, clip, scroll, round, overlay, quiet;
 } Open;
 
 typedef struct {
@@ -125,6 +125,7 @@ typedef struct {
   // it drew, in pixels.
   civue_vec2 origin;
   f32 clip[4], box[4];
+  civue_round round;
   // the atlases its glyphs and icons were in.
   u64 generations[2];
 } Memo;
@@ -617,6 +618,27 @@ void civue_node_open(civue_ui *ui, const civue_node_style *s) {
   bool scroll_y = s->overflow_y == CIVUE_OVERFLOW_SCROLL;
   civue_rect pad = inset(o.rect, border_of(&n->l));
 
+  // what a round node clips follows its corners, inside its border.
+  if (clips(&n->l)) {
+    f32 w = (f32)rect_w(o.rect), h = (f32)rect_h(o.rect);
+    f32 most = fminf(w, h) / 2, radii[4];
+    const f32 *bw = n->l.border_w;
+
+    for (u32 i = 0; i < 4; i++) {
+      // the wider of the two sides a corner joins, as the border is drawn.
+      f32 wider =
+        fmaxf(bw[i == 0 || i == 1 ? 0 : 2], bw[i == 0 || i == 3 ? 3 : 1]);
+      f32 radius = fminf(resolve0(t, s->radius[i], fminf(w, h)), most);
+
+      radii[i] = fmaxf(radius - wider, 0);
+      o.round |= radii[i] > 0;
+    }
+
+    if (o.round) {
+      civue_push_round(ui, pad, radii);
+    }
+  }
+
   if (scroll_x || scroll_y) {
     f32 cw = scroll_x ? n->ucw : (f32)rect_w(pad);
     f32 ch = scroll_y ? n->uch : (f32)rect_h(pad);
@@ -643,6 +665,10 @@ void civue_node_close(civue_ui *ui) {
   }
   else if (o.clip) {
     civue_pop_clip(ui);
+  }
+
+  if (o.round) {
+    civue_pop_round(ui);
   }
 }
 
@@ -1981,7 +2007,8 @@ static void put_back(civue_ui *ui, civue_tree *t, const Memo *m, Open *parent,
     }
   }
 
-  civue_dl_replay(civue_list(ui), m->quads.v, m->quads.len, dx, dy, m->clip);
+  civue_dl_replay(civue_list(ui), m->quads.v, m->quads.len, dx, dy, m->clip,
+                  &m->round);
   taken_over(t, m->box[0] + dx, m->box[1] + dy, m->box[2] + dx, m->box[3] + dy);
 
   civue_vec2 by = v2(dx / ui->scale, dy / ui->scale);
@@ -2027,6 +2054,7 @@ civue_memo_scope civue_memo_begin(civue_ui *ui, civue_id id, u64 inputs) {
   civue_rect c = civue_dl_clip(d);
   m->clip[0] = (f32)c.x0, m->clip[1] = (f32)c.y0;
   m->clip[2] = (f32)c.x1, m->clip[3] = (f32)c.y1;
+  m->round = civue_dl_round(d);
 
   const civue_draw_list *other = ui->on_overlay ? &ui->base : &ui->overlay;
   Take take = {

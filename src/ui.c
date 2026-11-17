@@ -313,6 +313,23 @@ civue_rect civue_clip_rect(civue_ui *ui) {
   return rect(c.x0 / s, c.y0 / s, c.x1 / s, c.y1 / s);
 }
 
+void civue_push_round(civue_ui *ui, civue_rect r, const f32 radii[4]) {
+  f64 s = ui->scale;
+  f32 scaled[4];
+
+  for (u32 i = 0; i < 4; i++) {
+    scaled[i] = radii[i] * (f32)s;
+  }
+
+  // not snapped to pixels: the curve follows that of the rect drawn.
+  civue_dl_push_round(civue_list(ui),
+                      rect(r.x0 * s, r.y0 * s, r.x1 * s, r.y1 * s), scaled);
+}
+
+void civue_pop_round(civue_ui *ui) {
+  civue_dl_pop_round(civue_list(ui));
+}
+
 // ---- interaction ----
 
 bool civue_owns_pointer(civue_ui *ui, civue_id id) {

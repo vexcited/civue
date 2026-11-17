@@ -249,8 +249,8 @@ static VkPipeline pipeline(civue_gfx *g, VkFormat format, u8 mode) {
   };
   VkVertexInputBindingDescription binding = {0, sizeof(civue_quad),
                                              VK_VERTEX_INPUT_RATE_INSTANCE};
-  VkVertexInputAttributeDescription attrs[8];
-  for (u32 i = 0; i < 8; i++) {
+  VkVertexInputAttributeDescription attrs[10];
+  for (u32 i = 0; i < 10; i++) {
     attrs[i] = (VkVertexInputAttributeDescription){
       i, 0, VK_FORMAT_R32G32B32A32_SFLOAT, i * 16};
   }

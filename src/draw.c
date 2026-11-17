@@ -8,6 +8,7 @@ void civue_dl_clear(civue_draw_list *d) {
   d->quads.len = 0;
   d->batches.len = 0;
   d->clips.len = 0;
+  d->rounds.len = 0;
   d->multiply = false;
   memset(d->turn, 0, sizeof d->turn);
   d->keep_hidden = false;
@@ -18,6 +19,7 @@ void civue_dl_free(civue_draw_list *d) {
   vec_free(&d->quads);
   vec_free(&d->batches);
   vec_free(&d->clips);
+  vec_free(&d->rounds);
 }
 
 void civue_dl_append(civue_draw_list *d, const civue_draw_list *other) {
@@ -51,6 +53,34 @@ void civue_dl_pop_clip(civue_draw_list *d) {
   }
 }
 
+civue_round civue_dl_round(const civue_draw_list *d) {
+  return d->rounds.len ? vec_last(&d->rounds) : (civue_round){};
+}
+
+void civue_dl_push_round(civue_draw_list *d, civue_rect r, const f32 radii[4]) {
+  civue_round round = {
+    .rect = {(f32)r.x0, (f32)r.y0, (f32)(r.x1 - r.x0), (f32)(r.y1 - r.y0)},
+  };
+
+  memcpy(round.radii, radii, sizeof round.radii);
+  // what is recorded under it only goes back where it was.
+  d->cuts++;
+  vec_push(&d->rounds, round);
+}
+
+void civue_dl_pop_round(civue_draw_list *d) {
+  if (d->rounds.len) {
+    d->rounds.len--;
+  }
+}
+
+static void set_round(const civue_draw_list *d, civue_quad *q) {
+  civue_round round = civue_dl_round(d);
+
+  memcpy(q->round, round.rect, sizeof q->round);
+  memcpy(q->round_radii, round.radii, sizeof q->round_radii);
+}
+
 void civue_dl_set_turn(civue_draw_list *d, f32 angle, civue_vec2 pivot) {
   if (angle == 0) {
     memset(d->turn, 0, sizeof d->turn);
@@ -78,6 +108,7 @@ static void push(civue_draw_list *d, civue_quad q, civue_texture texture) {
   civue_rect c = civue_dl_clip(d);
   q.clip[0] = (f32)c.x0, q.clip[1] = (f32)c.y0;
   q.clip[2] = (f32)c.x1, q.clip[3] = (f32)c.y1;
+  set_round(d, &q);
   memcpy(q.turn, d->turn, sizeof q.turn);
   bool turned = d->turn[0] != 0 || d->turn[1] != 0;
   // nothing visible outside the clip.
@@ -100,14 +131,17 @@ static void push(civue_draw_list *d, civue_quad q, civue_texture texture) {
 }
 
 void civue_dl_replay(civue_draw_list *d, const civue_quad *quads, u32 count,
-                     f32 dx, f32 dy, const f32 was[4]) {
+                     f32 dx, f32 dy, const f32 was[4],
+                     const civue_round *round_was) {
   if (!count) {
     return;
   }
 
   civue_rect c = civue_dl_clip(d);
   f32 now[4] = {(f32)c.x0, (f32)c.y0, (f32)c.x1, (f32)c.y1};
-  bool still = dx == 0 && dy == 0 && !memcmp(now, was, sizeof now);
+  civue_round round = civue_dl_round(d);
+  bool still = dx == 0 && dy == 0 && !memcmp(now, was, sizeof now) &&
+               !memcmp(&round, round_was, sizeof round);
 
   civue_batch *last = d->batches.len ? &vec_last(&d->batches) : nullptr;
   if (!last || last->multiply != d->multiply) {
@@ -128,6 +162,15 @@ void civue_dl_replay(civue_draw_list *d, const civue_quad *quads, u32 count,
     if (q->params[1] == CIVUE_QUAD_LINE) {
       q->radii[0] += dx, q->radii[1] += dy;
       q->radii[2] += dx, q->radii[3] += dy;
+    }
+
+    if (!memcmp(q->round, round_was->rect, sizeof q->round) &&
+        !memcmp(q->round_radii, round_was->radii, sizeof q->round_radii)) {
+      memcpy(q->round, round.rect, sizeof q->round);
+      memcpy(q->round_radii, round.radii, sizeof q->round_radii);
+    }
+    else {
+      q->round[0] += dx, q->round[1] += dy;
     }
 
     if (!memcmp(q->clip, was, sizeof q->clip)) {
@@ -224,6 +267,7 @@ void civue_dl_masks(civue_draw_list *d, const civue_glyph_quad *quads,
     }
 
     memcpy(q.rect, r, sizeof q.rect);
+  set_round(d, &q);
     memcpy(q.uv, quads[i].uv, sizeof q.uv);
     *out++ = q;
   }

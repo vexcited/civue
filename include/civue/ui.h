@@ -340,6 +340,11 @@ civue_response civue_interact(civue_ui *ui, civue_id id, civue_rect rect,
                               civue_sense sense);
 // whether `id` was topmost under the pointer last frame, or holds it.
 bool civue_owns_pointer(civue_ui *ui, civue_id id);
+// rounds the corners of what is drawn to those of `r` until
+// civue_pop_round, radii from the top left clockwise. it does not clip to
+// `r`'s sides, civue_push_clip does.
+void civue_push_round(civue_ui *ui, civue_rect r, const float radii[4]);
+void civue_pop_round(civue_ui *ui);
 bool civue_drawn_last_frame(civue_ui *ui, civue_id id);
 bool civue_under_overlay(civue_ui *ui, civue_vec2 p);
 bool civue_pointer_moved(civue_ui *ui);
