@@ -185,6 +185,24 @@ void civue_dl_replay(civue_draw_list *d, const civue_quad *quads, u32 count,
   }
 }
 
+void civue_dl_shift(civue_draw_list *d, f32 dx, f32 dy) {
+  vec_each(&d->quads, q) {
+    q->rect[0] += dx, q->rect[1] += dy;
+    q->clip[0] += dx, q->clip[1] += dy;
+    q->clip[2] += dx, q->clip[3] += dy;
+    q->round[0] += dx, q->round[1] += dy;
+
+    if (q->params[1] == CIVUE_QUAD_LINE) {
+      q->radii[0] += dx, q->radii[1] += dy;
+      q->radii[2] += dx, q->radii[3] += dy;
+    }
+
+    if (q->turn[0] != 0 || q->turn[1] != 0) {
+      q->turn[2] += dx, q->turn[3] += dy;
+    }
+  }
+}
+
 void civue_dl_rect(civue_draw_list *d, civue_rect r, const f32 radii[4],
                    civue_color fill, civue_color border, f32 border_width) {
   civue_quad q = {.params = {border_width, CIVUE_QUAD_RECT}};
@@ -249,6 +267,7 @@ void civue_dl_masks(civue_draw_list *d, const civue_glyph_quad *quads,
   q.clip[0] = (f32)c.x0, q.clip[1] = (f32)c.y0;
   q.clip[2] = (f32)c.x1, q.clip[3] = (f32)c.y1;
   premul(color, q.color);
+  set_round(d, &q);
   memcpy(q.turn, d->turn, sizeof q.turn);
   bool all = d->keep_hidden || d->turn[0] != 0 || d->turn[1] != 0;
 
@@ -267,7 +286,6 @@ void civue_dl_masks(civue_draw_list *d, const civue_glyph_quad *quads,
     }
 
     memcpy(q.rect, r, sizeof q.rect);
-  set_round(d, &q);
     memcpy(q.uv, quads[i].uv, sizeof q.uv);
     *out++ = q;
   }

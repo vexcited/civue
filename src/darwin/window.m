@@ -16,6 +16,12 @@
 @interface CivueView : CivuePointerView <NSTextInputClient>
 @end
 
+@interface CivueOutsideView : CivuePointerView
+@end
+
+@interface CivueOutsideWindow : NSPanel
+@end
+
 @interface CivueStripView : CivuePointerView
 @end
 
@@ -54,6 +60,13 @@ static struct {
   // follows appkit's layouts of the title bar, to put it right at once.
   CivueTitlebarObserver *titlebar_observer;
   f64 strip_height;
+  // overlays that go past the window's edges are drawn in a clear window
+  // of its own over the screen, which takes the pointer for the ui.
+  CivueOutsideWindow *outside;
+  CivueOutsideView *outside_view;
+  CAMetalLayer *outside_layer;
+  civue_draw_list outside_list;
+  bool outside_shown;
   civue_ui *ui;
   civue_app app_cb;
   civue_window_options options;
@@ -240,19 +253,6 @@ static void place_window_buttons() {
   }
 }
 
-// the material spans the app's title bar.
-static void place_glass() {
-  if (!W.glass) {
-    return;
-  }
-
-  NSRect b = W.window.contentView.bounds;
-  f64 h = W.options.titlebar;
-  NSRect want_at = {{0, b.size.height - h}, {b.size.width, h}};
-
-  if (!NSEqualRects(W.glass.frame, want_at)) {
-    W.glass.frame = want_at;
-  }
 void civue_window_buttons_hidden(bool hidden) {
   NSWindowButton kinds[] = {
     NSWindowCloseButton,
@@ -271,6 +271,19 @@ void civue_window_buttons_hidden(bool hidden) {
   place_window_buttons();
 }
 
+// the material spans the app's title bar.
+static void place_glass() {
+  if (!W.glass) {
+    return;
+  }
+
+  NSRect b = W.window.contentView.bounds;
+  f64 h = W.options.titlebar;
+  NSRect want_at = {{0, b.size.height - h}, {b.size.width, h}};
+
+  if (!NSEqualRects(W.glass.frame, want_at)) {
+    W.glass.frame = want_at;
+  }
 }
 
 static NSCursor *system_cursor(civue_cursor_kind kind) {
@@ -307,6 +320,7 @@ static void set_cursor(civue_cursor c) {
 static void schedule_timer(f64 at);
 static void draw_strip(id<MTLCommandBuffer> cb, const civue_draw_list *list);
 static f64 bar_height();
+static void show_as_srgb(CAMetalLayer *layer);
 
 // a frame the cpu would take this many pixels' fill to draw goes to the gpu.
 constexpr u64 COSTLY = 32'000'000;
@@ -665,6 +679,108 @@ static void draw_on_gpu(const civue_draw_list *list, civue_color background,
   W.gpu_at = now_s();
 }
 
+// where the screen is around the ui, in its points.
+static civue_rect screen_around(NSRect of) {
+  NSRect v = [W.window convertRectToScreen:[W.view convertRect:W.view.bounds
+                                                        toView:nil]];
+
+  return rect(of.origin.x - v.origin.x, NSMaxY(v) - NSMaxY(of),
+              NSMaxX(of) - v.origin.x, NSMaxY(v) - of.origin.y);
+}
+
+static bool may_go_outside() {
+  return W.window.screen && !W.full_screen && !W.resizing &&
+         !(W.window.styleMask & NSWindowStyleMaskFullScreen);
+}
+
+static void hide_outside() {
+  if (!W.outside_shown) {
+    return;
+  }
+
+  W.outside_shown = false;
+  [W.window removeChildWindow:W.outside];
+  [W.outside orderOut:nil];
+}
+
+// draws the overlays alone in the window over the screen.
+static void draw_outside(f32 scale) {
+  if (!W.outside) {
+    W.outside_layer = [CAMetalLayer layer];
+    W.outside_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    show_as_srgb(W.outside_layer);
+    W.outside_layer.opaque = NO;
+    W.outside_layer.presentsWithTransaction = YES;
+    W.outside_layer.allowsNextDrawableTimeout = NO;
+
+    W.outside = [[CivueOutsideWindow alloc]
+      initWithContentRect:NSZeroRect
+                styleMask:NSWindowStyleMaskBorderless |
+                          NSWindowStyleMaskNonactivatingPanel
+                  backing:NSBackingStoreBuffered
+                    defer:NO];
+    W.outside.releasedWhenClosed = NO;
+    W.outside.opaque = NO;
+    W.outside.hasShadow = NO;
+    W.outside.backgroundColor = NSColor.clearColor;
+    W.outside.acceptsMouseMovedEvents = YES;
+    W.outside.hidesOnDeactivate = NO;
+    W.outside.animationBehavior = NSWindowAnimationBehaviorNone;
+    W.outside_view = [[CivueOutsideView alloc] initWithFrame:NSZeroRect];
+    W.outside_view.wantsLayer = YES;
+    W.outside.contentView = W.outside_view;
+  }
+
+  NSRect screen = W.window.screen.frame;
+
+  if (!NSEqualRects(W.outside.frame, screen)) {
+    [W.outside setFrame:screen display:NO];
+  }
+
+  W.outside_layer.contentsScale = scale;
+  W.outside_layer.drawableSize =
+    CGSizeMake(fmax(round(screen.size.width * scale), 1),
+               fmax(round(screen.size.height * scale), 1));
+
+  if (!W.outside_layer.device) {
+    W.outside_layer.device = (__bridge id<MTLDevice>)civue_gfx_device(W.gfx);
+  }
+
+  civue_rect around = screen_around(screen);
+
+  civue_dl_clear(&W.outside_list);
+  civue_dl_append(&W.outside_list, &W.ui->overlay);
+  civue_dl_shift(&W.outside_list, (f32)round(-around.x0 * scale),
+                 (f32)round(-around.y0 * scale));
+
+  id<CAMetalDrawable> drawable = [W.outside_layer nextDrawable];
+
+  if (!drawable) {
+    want();
+    return;
+  }
+
+  id<MTLTexture> texture = drawable.texture;
+  id<MTLCommandQueue> queue = (__bridge id)civue_gfx_queue(W.gfx);
+  id<MTLCommandBuffer> cb = [queue commandBuffer];
+  civue_color clear = {};
+
+  civue_gfx_encode(W.gfx, (__bridge void *)cb, (__bridge void *)texture,
+                   (u32)texture.width, (u32)texture.height, &W.outside_list,
+                   &clear);
+  [cb commit];
+  [cb waitUntilScheduled];
+  [CATransaction begin];
+  [CATransaction setDisableActions:YES];
+  [drawable present];
+  [CATransaction commit];
+
+  if (!W.outside_shown) {
+    W.outside_shown = true;
+    [W.window addChildWindow:W.outside ordered:NSWindowAbove];
+  }
+}
+
 static void present(civue_color background, u32 pw, u32 ph) {
   civue_damage changes;
   const civue_draw_list *list =
@@ -731,6 +847,9 @@ static void frame() {
 
     ui->system_dark = system_dark();
     ui->window_focused = W.window.keyWindow;
+    ui->screen_known = true;
+    ui->screen = may_go_outside() ? screen_around(W.window.screen.visibleFrame)
+                                  : rect(0, 0, pw / scale, ph / scale);
 
     // what a pass asks of the window is asked once, the passes after it
     // begin without it and without the input that made it.
@@ -767,7 +886,17 @@ static void frame() {
       civue__webviews_place(ui->frames);
     }
 
+    // the frame is shown without its overlays when they have a window.
+    ui->overlay_apart =
+      ui->overlay_outside && ui->overlay.quads.len != 0 && may_go_outside();
     present(background, pw, ph);
+
+    if (ui->overlay_apart) {
+      draw_outside(scale);
+    }
+    else {
+      hide_outside();
+    }
 
     if (!W.cursor_set || ui->cursor.kind != W.cursor.kind ||
         ui->cursor.angle != W.cursor.angle) {
@@ -884,7 +1013,14 @@ static void schedule_timer(f64 at) {
 static civue_vec2 event_point(NSEvent *e) {
   bool strip = W.strip_shown && e.window == W.strip.window;
   NSView *view = strip ? W.strip_view : W.view;
-  NSPoint v = [view convertPoint:e.locationInWindow fromView:nil];
+  NSPoint at = e.locationInWindow;
+
+  // the window over the screen says where on the screen.
+  if (W.outside && e.window == W.outside) {
+    at = [W.window convertPointFromScreen:[W.outside convertPointToScreen:at]];
+  }
+
+  NSPoint v = [view convertPoint:at fromView:nil];
   return v2(v.x, v.y);
 }
 
@@ -1100,6 +1236,12 @@ static NSString *string_of(id s) {
 }
 
 - (void)mouseExited:(NSEvent *)e {
+  // the pointer leaves the window for the one over it, or that one as it
+  // goes away: it is still over the ui.
+  if ((self == (NSView *)W.outside_view) != W.outside_shown) {
+    return;
+  }
+
   if (!W.input.down[0] && !W.input.down[1] && !W.input.down[2]) {
     W.input.has_mouse = false;
   }
@@ -1152,6 +1294,12 @@ static void sync_resizes(bool on) {
 
 - (BOOL)acceptsFirstResponder {
   return YES;
+}
+
+// under a transparent title bar appkit moves the window on any press there.
+// the app says when a press moves it, see drag_window.
+- (BOOL)mouseDownCanMoveWindow {
+  return NO;
 }
 
 - (CALayer *)makeBackingLayer {
@@ -1296,12 +1444,6 @@ static void sync_resizes(bool on) {
 
 - (NSRange)markedRange {
   return W.marked ? NSMakeRange(0, W.marked.length)
-// under a transparent title bar appkit moves the window on any press there.
-// the app says when a press moves it, see drag_window.
-- (BOOL)mouseDownCanMoveWindow {
-  return NO;
-}
-
                   : NSMakeRange(NSNotFound, 0);
 }
 
@@ -1381,6 +1523,39 @@ static f64 bar_height() {
 static NSView *titlebar_row() {
   return [W.window standardWindowButton:NSWindowCloseButton].superview;
 }
+
+@implementation CivueOutsideView
+
+- (BOOL)mouseDownCanMoveWindow {
+  return NO;
+}
+
+- (CALayer *)makeBackingLayer {
+  return W.outside_layer;
+}
+
+- (void)scrollWheel:(NSEvent *)e {
+  [W.view scrollWheel:e];
+}
+
+- (void)magnifyWithEvent:(NSEvent *)e {
+  [W.view magnifyWithEvent:e];
+}
+
+@end
+
+// the keys stay with the app's window.
+@implementation CivueOutsideWindow
+
+- (BOOL)canBecomeKeyWindow {
+  return NO;
+}
+
+- (BOOL)canBecomeMainWindow {
+  return NO;
+}
+
+@end
 
 @implementation CivueStripView
 

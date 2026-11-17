@@ -128,6 +128,12 @@ void civue_begin_frame(civue_ui *ui, civue_vec2 size, f32 scale,
   civue_dl_clear(&ui->base);
   civue_dl_clear(&ui->overlay);
   ui->on_overlay = false;
+  ui->overlay_outside = false;
+
+  if (!ui->screen_known) {
+    ui->screen = rect(0, 0, size.x, size.y);
+  }
+
   ui->repaint = false;
   ui->repaint_at = 0;
   ui->cursor = (civue_cursor){};
@@ -165,7 +171,7 @@ void civue_begin_frame(civue_ui *ui, civue_vec2 size, f32 scale,
 
 const civue_draw_list *civue_frame_list(civue_ui *ui) {
   // most frames draw nothing over the rest.
-  if (!ui->overlay.quads.len) {
+  if (!ui->overlay.quads.len || ui->overlay_apart) {
     return &ui->base;
   }
 
@@ -195,7 +201,7 @@ const civue_draw_list *civue_frame_changes(civue_ui *ui, civue_color clear,
     memcpy(ui->last_generations, generations, sizeof generations);
   }
 
-  if (ui->overlay.quads.len) {
+  if (ui->overlay.quads.len && !ui->overlay_apart) {
     civue_dl_clear(&ui->combined);
     civue_dl_append(&ui->combined, &ui->base);
     civue_dl_append(&ui->combined, &ui->overlay);
@@ -307,12 +313,6 @@ void civue_pop_clip(civue_ui *ui) {
   civue_dl_pop_clip(civue_list(ui));
 }
 
-civue_rect civue_clip_rect(civue_ui *ui) {
-  civue_rect c = civue_dl_clip(civue_list(ui));
-  f64 s = ui->scale;
-  return rect(c.x0 / s, c.y0 / s, c.x1 / s, c.y1 / s);
-}
-
 void civue_push_round(civue_ui *ui, civue_rect r, const f32 radii[4]) {
   f64 s = ui->scale;
   f32 scaled[4];
@@ -328,6 +328,12 @@ void civue_push_round(civue_ui *ui, civue_rect r, const f32 radii[4]) {
 
 void civue_pop_round(civue_ui *ui) {
   civue_dl_pop_round(civue_list(ui));
+}
+
+civue_rect civue_clip_rect(civue_ui *ui) {
+  civue_rect c = civue_dl_clip(civue_list(ui));
+  f64 s = ui->scale;
+  return rect(c.x0 / s, c.y0 / s, c.x1 / s, c.y1 / s);
 }
 
 // ---- interaction ----
