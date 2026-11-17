@@ -117,6 +117,12 @@ static inline void buf_putc(civue_bytes *b, char c) {
   vec_push(b, (u8)c);
 }
 
+// decodes png, jpeg, webp or the first frame of a gif into premultiplied
+// rgba8, rows from the top, its longest side `max_pixels` at most when that
+// is not 0. malloc'd, null when the bytes are no image. from any thread.
+u8 *civue__image_decode(const u8 *bytes, usize n, u32 max_pixels, u32 *width,
+                        u32 *height);
+
 /* ========================================================================== */
 /* maps, hashing and text.                                                    */
 /* ========================================================================== */

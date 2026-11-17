@@ -72,6 +72,7 @@ gpui's style names aren't macros of their own: `div` and `text` paste each of th
 | `raster.h` | draw lists drawn on the cpu, and what changed between two of them |
 | `text.h` | layout and rendering in the system's faces, or faces the app sets from font files |
 | `icons.h` | svg icons from any iconify set or the app's own, tinted or in their own colors |
+| `images.h` | images from urls the app fetches, cached in memory and on disk, decoded off the main thread |
 | `ui.h` | frames, input, ids, interaction, focus, the light or dark appearance, animation, painting snapped to pixels |
 | `widgets.h`, `field.h`, `numfield.h`, `rich.h` | headless controls, text fields, number fields, rich text editing |
 | `layout.h` | nodes laid out like css blocks, flexbox and grid, painted like gpui's divs |

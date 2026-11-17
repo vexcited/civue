@@ -343,19 +343,20 @@ set(api [==[${arg_API}]==])\nset(out [==[${gen}]==])\n")
 endfunction()
 
 set(CIVUE_SOURCES
-  src/base.c src/draw.c src/field.c src/icons.c src/layout.c
+  src/base.c src/draw.c src/field.c src/icons.c src/images.c src/layout.c
   src/numfield.c src/raster.c
   src/richedit.c src/richtext.c src/ui.c src/widgets.c)
 
 set(CIVUE_DARWIN_SOURCES
   src/darwin/clipboard.m src/darwin/cursors.m src/darwin/filepanel.m
-  src/darwin/gfx.m src/darwin/gpu.m src/darwin/pasteboard.m
+  src/darwin/gfx.m src/darwin/gpu.m src/darwin/image.m
+  src/darwin/pasteboard.m
   src/darwin/spell.m src/darwin/svg.m src/darwin/text.c
   src/darwin/webview.m src/darwin/window.m)
 
 set(CIVUE_LINUX_SOURCES
   src/linux/clipboard.c src/linux/cursors.c src/linux/filepanel.c
-  src/linux/gfx.c src/linux/pasteboard.c src/linux/spell.c
+  src/linux/gfx.c src/linux/image.c src/linux/pasteboard.c src/linux/spell.c
   src/linux/svg.c src/linux/text.c src/linux/vk.c src/linux/webview.c
   src/linux/window.c)
 
@@ -371,7 +372,7 @@ if(APPLE)
   target_link_libraries(civue PUBLIC
     "-framework Foundation" "-framework AppKit" "-framework Metal"
     "-framework QuartzCore" "-framework CoreText" "-framework IOSurface"
-    "-framework CoreGraphics"
+    "-framework CoreGraphics" "-framework ImageIO"
     "-framework CoreFoundation" "-framework UniformTypeIdentifiers"
     "-framework WebKit" objc)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -381,7 +382,7 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   find_package(Threads REQUIRED)
   find_package(PkgConfig REQUIRED)
   pkg_check_modules(CIVUE_DEPS REQUIRED IMPORTED_TARGET
-    vulkan freetype2 harfbuzz fontconfig fribidi librsvg-2.0 cairo
+    vulkan freetype2 harfbuzz fontconfig fribidi librsvg-2.0 gdk-pixbuf-2.0 cairo
     gio-2.0 wayland-client wayland-cursor xkbcommon enchant-2)
   target_link_libraries(civue PUBLIC
     PkgConfig::CIVUE_DEPS Threads::Threads m)
