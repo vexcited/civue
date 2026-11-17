@@ -253,6 +253,24 @@ static void place_glass() {
   if (!NSEqualRects(W.glass.frame, want_at)) {
     W.glass.frame = want_at;
   }
+void civue_window_buttons_hidden(bool hidden) {
+  NSWindowButton kinds[] = {
+    NSWindowCloseButton,
+    NSWindowMiniaturizeButton,
+    NSWindowZoomButton,
+  };
+
+  for (u32 i = 0; i < countof(kinds); i++) {
+    [W.window standardWindowButton:kinds[i]].hidden = hidden;
+  }
+
+  // appkit lays its title bar out again for it, the lights back where it
+  // wants them: done now and undone, or they show there until the next
+  // frame.
+  [W.window.contentView.superview layoutSubtreeIfNeeded];
+  place_window_buttons();
+}
+
 }
 
 static NSCursor *system_cursor(civue_cursor_kind kind) {
@@ -1278,6 +1296,12 @@ static void sync_resizes(bool on) {
 
 - (NSRange)markedRange {
   return W.marked ? NSMakeRange(0, W.marked.length)
+// under a transparent title bar appkit moves the window on any press there.
+// the app says when a press moves it, see drag_window.
+- (BOOL)mouseDownCanMoveWindow {
+  return NO;
+}
+
                   : NSMakeRange(NSNotFound, 0);
 }
 

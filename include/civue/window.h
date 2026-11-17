@@ -67,6 +67,10 @@ void civue_window_run_sized(const civue_window_options *o,
   civue_window_run_sized(o, make, arg, sizeof(civue_ui))
 // asks the window for a frame, from any thread.
 void civue_window_wake();
+// hides the buttons the system draws in the app's title bar, for what the
+// app draws over them. from the main thread. nothing where the app draws
+// its own.
+void civue_window_buttons_hidden(bool hidden);
 // what an item of the system's menu bar asks for, taken by the next frame from
 // civue_input: a key pressed as if typed, or a command of the app's own. from
 // the main thread.
