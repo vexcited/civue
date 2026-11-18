@@ -643,6 +643,27 @@ static bool rounded(const civue_quad *q) {
          q->round_radii[2] > 0 || q->round_radii[3] > 0;
 }
 
+// what a rounded clip leaves of a pixel: only its corners cut, the sides
+// are the rect clip's.
+static f32 corners(const civue_quad *q, f32 x, f32 y) {
+  f32 hx = q->round[2] * 0.5f, hy = q->round[3] * 0.5f;
+  f32 px = x - q->round[0] - hx, py = y - q->round[1] - hy;
+  f32 r = px > 0 ? q->round_radii[1] : q->round_radii[0];
+
+  if (py > 0) {
+    r = px > 0 ? q->round_radii[2] : q->round_radii[3];
+  }
+
+  r = fminf(r, fminf(hx, hy));
+  f32 qx = fabsf(px) - hx + r, qy = fabsf(py) - hy + r;
+
+  if (r <= 0 || qx <= 0 || qy <= 0) {
+    return 1;
+  }
+
+  return clamp01(0.5f + r - sqrtf(qx * qx + qy * qy));
+}
+
 static bool shade_kind(const Raster *r, const civue_quad *q, f32 x, f32 y,
                        f32 out[4]);
 
@@ -654,9 +675,7 @@ static bool shade(const Raster *r, const civue_quad *q, f32 x, f32 y,
   }
 
   if (rounded(q)) {
-    f32 hx = q->round[2] * 0.5f, hy = q->round[3] * 0.5f;
-    f32 px = x - q->round[0] - hx, py = y - q->round[1] - hy;
-    f32 inside = clamp01(0.5f - sd_rounded(px, py, hx, hy, q->round_radii));
+    f32 inside = corners(q, x, y);
 
     for (u32 i = 0; i < 4; i++) {
       out[i] *= inside;

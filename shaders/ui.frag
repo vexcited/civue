@@ -71,6 +71,23 @@ float coverage(vec2 local, vec4 rect, vec4 radii) {
     return clamp(0.5 - d, 0.0, 1.0);
 }
 
+// what a rounded clip leaves of a pixel: only its corners cut, the sides
+// are the rect clip's.
+float corners(vec2 local, vec4 rect, vec4 radii) {
+    vec2 hs = rect.zw * 0.5;
+    vec2 p = local - rect.xy - hs;
+    float r = p.x > 0.0 ? radii.y : radii.x;
+    if (p.y > 0.0) {
+        r = p.x > 0.0 ? radii.z : radii.w;
+    }
+    r = min(r, min(hs.x, hs.y));
+    vec2 q = abs(p) - hs + r;
+    if (r <= 0.0 || q.x <= 0.0 || q.y <= 0.0) {
+        return 1.0;
+    }
+    return clamp(0.5 + r - length(q), 0.0, 1.0);
+}
+
 // evan wallace's closed form for a gaussian blurred rounded rect.
 float gaussian(float x, float sigma) {
     return exp(-(x * x) / (2.0 * sigma * sigma)) / (2.50662827 * sigma);
@@ -194,7 +211,7 @@ void main() {
     vec4 c = shade();
     // a rounded clip cuts the corners its rect clip leaves.
     if (max(max(i_round_radii.x, i_round_radii.y), max(i_round_radii.z, i_round_radii.w)) > 0.0) {
-        c *= coverage(i_local, i_round, i_round_radii);
+        c *= corners(i_local, i_round, i_round_radii);
     }
     out_color = c;
 }
