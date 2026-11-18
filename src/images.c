@@ -146,11 +146,20 @@ static Blob *read_file(const char *path) {
   return b;
 }
 
-// written beside then renamed, so that a file is whole or is not there.
+// written beside then renamed, so that a file is whole or is not there. the
+// file beside is this write's alone, another app's with the same cache has
+// its own.
 static void write_file(const char *path, const Blob *b, u64 serial) {
-  char *part = xfmt("%s.%llx.part", path, (unsigned long long)serial);
-  int fd = open(part, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
-  bool ok = fd >= 0;
+  char *part = xfmt("%s.%lx.%llx.part", path, (unsigned long)getpid(),
+                    (unsigned long long)serial);
+  int fd = open(part, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+
+  if (fd < 0) {
+    free(part);
+    return;
+  }
+
+  bool ok = true;
   usize put = 0;
 
   while (ok && put < b->len) {
@@ -164,9 +173,7 @@ static void write_file(const char *path, const Blob *b, u64 serial) {
     put += ok ? (usize)n : 0;
   }
 
-  if (fd >= 0) {
-    ok = close(fd) == 0 && ok;
-  }
+  ok = close(fd) == 0 && ok;
 
   if (!ok || rename(part, path) != 0) {
     unlink(part);
