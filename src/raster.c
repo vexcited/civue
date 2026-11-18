@@ -1705,7 +1705,7 @@ constexpr u64 BLENDED = 4;
 static bool quad_cost(const civue_quad *q, civue_box box, u64 *cost) {
   u32 kind = (u32)q->params[1];
 
-  if (kind == CIVUE_QUAD_MASK && !turned(q)) {
+  if (kind == CIVUE_QUAD_MASK && !turned(q) && !rounded(q)) {
     return true;
   }
 
@@ -1725,7 +1725,7 @@ static bool quad_cost(const civue_quad *q, civue_box box, u64 *cost) {
     return false;
   }
 
-  if (turned(q)) {
+  if (turned(q) || rounded(q)) {
     *cost += (u64)area(b) * ASKED;
     return true;
   }
