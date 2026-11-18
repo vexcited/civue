@@ -274,7 +274,8 @@ static void decode(Job *job) {
     return;
   }
 
-  u32 side = job->max_pixels < 1024 ? job->max_pixels : SVG_SIDE;
+  // PIXELS_MAX is what no size asked for becomes.
+  u32 side = job->max_pixels < PIXELS_MAX ? job->max_pixels : SVG_SIDE;
   civue_bytes rgba = {};
 
   if (civue_svg_rasterize((const char *)b->data, b->len, side, side, &rgba)) {
