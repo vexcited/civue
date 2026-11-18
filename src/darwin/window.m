@@ -1241,7 +1241,11 @@ static NSString *string_of(id s) {
 - (void)mouseExited:(NSEvent *)e {
   // the pointer leaves the window for the one over it, or that one as it
   // goes away: it is still over the ui.
-  if ((self == (NSView *)W.outside_view) != W.outside_shown) {
+  bool outside = self == (NSView *)W.outside_view;
+
+  if (outside ? !W.outside_shown
+              : W.outside_shown &&
+                  NSPointInRect(NSEvent.mouseLocation, W.outside.frame)) {
     return;
   }
 
