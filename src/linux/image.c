@@ -5,15 +5,61 @@
 // an image no window could show whole, refused rather than decoded.
 constexpr u64 DECODED_PIXELS_MAX = 64u << 20;
 
+typedef struct {
+  u32 max_pixels;
+  bool refused;
+} Sizing;
+
+// the size is known before the pixels are made. an image too large is
+// refused there, a size of zero stops a loader before it makes them. one
+// larger than asked for is decoded smaller where the loader can, and
+// turning it later keeps its longest side.
+static void on_size(GdkPixbufLoader *loader, int width, int height,
+                    gpointer arg) {
+  Sizing *s = arg;
+  u64 w = (u64)MAX(width, 1), h = (u64)MAX(height, 1);
+  u64 longest = MAX(w, h);
+
+  if (w * h > DECODED_PIXELS_MAX) {
+    s->refused = true;
+    gdk_pixbuf_loader_set_size(loader, 0, 0);
+  }
+  else if (s->max_pixels != 0 && longest > s->max_pixels) {
+    gdk_pixbuf_loader_set_size(loader,
+                               (int)MAX(w * s->max_pixels / longest, 1),
+                               (int)MAX(h * s->max_pixels / longest, 1));
+  }
+}
+
+// the bytes go in by parts, so that a refused image stops being read.
+constexpr usize PART = 64u << 10;
+
 // what gdk-pixbuf has a loader for, webp being one to install on most
 // systems.
 u8 *civue__image_decode(const u8 *bytes, usize n, u32 max_pixels, u32 *width,
                         u32 *height) {
-  GInputStream *in =
-    g_memory_input_stream_new_from_data(bytes, (gssize)n, nullptr);
-  GdkPixbuf *loaded = gdk_pixbuf_new_from_stream(in, nullptr, nullptr);
+  GdkPixbufLoader *loader = gdk_pixbuf_loader_new();
+  Sizing sizing = {.max_pixels = max_pixels};
+  bool ok = true;
 
-  g_object_unref(in);
+  g_signal_connect(loader, "size-prepared", G_CALLBACK(on_size), &sizing);
+
+  for (usize at = 0; ok && at < n; at += PART) {
+    ok = gdk_pixbuf_loader_write(loader, bytes + at, MIN(n - at, PART),
+                                 nullptr) &&
+         !sizing.refused;
+  }
+
+  // closed even when it failed, a loader left open warns when freed.
+  ok = gdk_pixbuf_loader_close(loader, nullptr) && ok && !sizing.refused;
+
+  GdkPixbuf *loaded = ok ? gdk_pixbuf_loader_get_pixbuf(loader) : nullptr;
+
+  if (loaded) {
+    g_object_ref(loaded);
+  }
+
+  g_object_unref(loader);
 
   if (!loaded) {
     return nullptr;
