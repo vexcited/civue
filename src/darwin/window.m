@@ -268,7 +268,10 @@ void civue_window_buttons_hidden(bool hidden) {
   // wants them: done now and undone, or they show there until the next
   // frame.
   [W.window.contentView.superview layoutSubtreeIfNeeded];
-  place_window_buttons();
+
+  if (!W.full_screen) {
+    place_window_buttons();
+  }
 }
 
 // the material spans the app's title bar.
