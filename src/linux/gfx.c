@@ -250,7 +250,7 @@ static VkPipeline pipeline(civue_gfx *g, VkFormat format, u8 mode) {
   VkVertexInputBindingDescription binding = {0, sizeof(civue_quad),
                                              VK_VERTEX_INPUT_RATE_INSTANCE};
   VkVertexInputAttributeDescription attrs[10];
-  for (u32 i = 0; i < 10; i++) {
+  for (u32 i = 0; i < countof(attrs); i++) {
     attrs[i] = (VkVertexInputAttributeDescription){
       i, 0, VK_FORMAT_R32G32B32A32_SFLOAT, i * 16};
   }
@@ -258,7 +258,7 @@ static VkPipeline pipeline(civue_gfx *g, VkFormat format, u8 mode) {
     .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
     .vertexBindingDescriptionCount = 1,
     .pVertexBindingDescriptions = &binding,
-    .vertexAttributeDescriptionCount = 8,
+    .vertexAttributeDescriptionCount = countof(attrs),
     .pVertexAttributeDescriptions = attrs};
   VkPipelineInputAssemblyStateCreateInfo assembly = {
     .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
