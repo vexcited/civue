@@ -636,6 +636,10 @@ static void drop_entry(civue_images *im, Entry *e) {
 
 // frees the images asked for longest ago until the budget holds.
 static void evict(civue_images *im) {
+  if (im->bytes <= im->o.memory_bytes) {
+    return;
+  }
+
   f64 now = now_s();
   Entry *e = im->oldest;
 
@@ -889,9 +893,10 @@ static void drain(civue_images *im) {
   im->done = nullptr;
   pthread_mutex_unlock(&im->lock);
 
-  if (!job) {
-    return;
-  }
+  bool worked = job != nullptr;
+
+  // an image kept for the frame that showed it is evicted by a later one.
+  evict(im);
 
   while (job) {
     Job *next = job->next;
@@ -907,7 +912,9 @@ static void drain(civue_images *im) {
     job = next;
   }
 
-  pump(im);
+  if (worked) {
+    pump(im);
+  }
 }
 
 /* ========================================================================== */
