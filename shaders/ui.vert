@@ -25,6 +25,9 @@ layout(location = 5) in vec4 params;
 layout(location = 6) in vec4 uv;
 // cos, sin, pivot x, pivot y of a turn, none when cos and sin are zero.
 layout(location = 7) in vec4 turn;
+// x, y, width, height of a rounded clip, then its radii, none when zero.
+layout(location = 8) in vec4 round_rect;
+layout(location = 9) in vec4 round_radii;
 
 layout(location = 0) out vec2 o_local;
 layout(location = 1) flat out vec4 o_rect;
@@ -35,6 +38,8 @@ layout(location = 5) flat out vec4 o_radii;
 layout(location = 6) flat out vec4 o_params;
 layout(location = 7) out vec2 o_uv;
 layout(location = 8) flat out vec4 o_sides;
+layout(location = 9) flat out vec4 o_round;
+layout(location = 10) flat out vec4 o_round_radii;
 
 const float SHADOW = 1.0;
 
@@ -63,6 +68,8 @@ void main() {
     o_radii = radii;
     o_params = params;
     o_sides = uv;
+    o_round = round_rect;
+    o_round_radii = round_radii;
     vec2 t = (p - rect.xy) / rect.zw;
     o_uv = mix(uv.xy, uv.zw, t);
 }

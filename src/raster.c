@@ -278,12 +278,12 @@ static civue_box bounds(const civue_quad *q, civue_box limit) {
 }
 
 static bool same_quad(const civue_quad *a, const civue_quad *b) {
-  u64 x[16], y[16], differ = 0;
+  u64 x[20], y[20], differ = 0;
   static_assert(sizeof x == sizeof *a);
   memcpy(x, a, sizeof x);
   memcpy(y, b, sizeof y);
 
-  for (u32 i = 0; i < 16; i++) {
+  for (u32 i = 0; i < 20; i++) {
     differ |= x[i] ^ y[i];
   }
 
@@ -638,9 +638,55 @@ static void color_at(const Raster *r, const civue_quad *q, f32 x, f32 y,
   }
 }
 
+static bool rounded(const civue_quad *q) {
+  return q->round_radii[0] > 0 || q->round_radii[1] > 0 ||
+         q->round_radii[2] > 0 || q->round_radii[3] > 0;
+}
+
+// what a rounded clip leaves of a pixel: only its corners cut, the sides
+// are the rect clip's.
+static f32 corners(const civue_quad *q, f32 x, f32 y) {
+  f32 hx = q->round[2] * 0.5f, hy = q->round[3] * 0.5f;
+  f32 px = x - q->round[0] - hx, py = y - q->round[1] - hy;
+  f32 r = px > 0 ? q->round_radii[1] : q->round_radii[0];
+
+  if (py > 0) {
+    r = px > 0 ? q->round_radii[2] : q->round_radii[3];
+  }
+
+  r = fminf(r, fminf(hx, hy));
+  f32 qx = fabsf(px) - hx + r, qy = fabsf(py) - hy + r;
+
+  if (r <= 0 || qx <= 0 || qy <= 0) {
+    return 1;
+  }
+
+  return clamp01(0.5f + r - sqrtf(qx * qx + qy * qy));
+}
+
+static bool shade_kind(const Raster *r, const civue_quad *q, f32 x, f32 y,
+                       f32 out[4]);
+
 // what a quad's fragment shader returns at a point, false when it discards.
 static bool shade(const Raster *r, const civue_quad *q, f32 x, f32 y,
                   f32 out[4]) {
+  if (!shade_kind(r, q, x, y, out)) {
+    return false;
+  }
+
+  if (rounded(q)) {
+    f32 inside = corners(q, x, y);
+
+    for (u32 i = 0; i < 4; i++) {
+      out[i] *= inside;
+    }
+  }
+
+  return true;
+}
+
+static bool shade_kind(const Raster *r, const civue_quad *q, f32 x, f32 y,
+                       f32 out[4]) {
   if (x < q->clip[0] || y < q->clip[1] || x >= q->clip[2] || y >= q->clip[3]) {
     return false;
   }
@@ -908,7 +954,7 @@ static Flat flat(const civue_quad *q) {
 }
 
 static bool is_flat(const civue_quad *q) {
-  return (u32)q->params[1] == CIVUE_QUAD_RECT && !turned(q) &&
+  return (u32)q->params[1] == CIVUE_QUAD_RECT && !turned(q) && !rounded(q) &&
          q->params[2] <= 0.5f;
 }
 
@@ -1397,7 +1443,11 @@ static void quad(const Raster *r, const civue_quad *q) {
     return;
   }
 
-  if (is_flat(q)) {
+  // rounded off, its pixels are each asked.
+  if (rounded(q)) {
+    each(r, q, b);
+  }
+  else if (is_flat(q)) {
     rect_quad(r, q, b);
   }
   else if (kind == CIVUE_QUAD_MASK) {
@@ -1655,7 +1705,7 @@ constexpr u64 BLENDED = 4;
 static bool quad_cost(const civue_quad *q, civue_box box, u64 *cost) {
   u32 kind = (u32)q->params[1];
 
-  if (kind == CIVUE_QUAD_MASK && !turned(q)) {
+  if (kind == CIVUE_QUAD_MASK && !turned(q) && !rounded(q)) {
     return true;
   }
 
@@ -1675,7 +1725,7 @@ static bool quad_cost(const civue_quad *q, civue_box box, u64 *cost) {
     return false;
   }
 
-  if (turned(q)) {
+  if (turned(q) || rounded(q)) {
     *cost += (u64)area(b) * ASKED;
     return true;
   }

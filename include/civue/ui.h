@@ -263,6 +263,16 @@ struct civue_ui {
   // for a window with the system's own.
   float titlebar_height;
   bool window_focused;
+  // the screen around the window in the ui's points, the window's top left
+  // at 0, 0: how far overlays may go past the window's edges. the window
+  // itself where they cannot.
+  civue_rect screen;
+  // set by the app during a frame whose overlays go past the window's
+  // edges, a menu longer than the window: they are drawn over the screen.
+  bool overlay_outside;
+  // set by the window: the overlays are drawn apart from the frame, and
+  // `screen` is its to say.
+  bool overlay_apart, screen_known;
   // the system's glass shows through the title bar where nothing is drawn.
   bool titlebar_glass;
   // the app draws the window's buttons in the title bar, where the system
@@ -330,6 +340,11 @@ civue_draw_list *civue_list(civue_ui *ui);
 void civue_push_clip(civue_ui *ui, civue_rect r);
 void civue_pop_clip(civue_ui *ui);
 civue_rect civue_clip_rect(civue_ui *ui);
+// rounds the corners of what is drawn to those of `r` until
+// civue_pop_round, radii from the top left clockwise. it does not clip to
+// `r`'s sides, civue_push_clip does.
+void civue_push_round(civue_ui *ui, civue_rect r, const float radii[4]);
+void civue_pop_round(civue_ui *ui);
 
 /* ========================================================================== */
 /* interaction.                                                               */

@@ -128,6 +128,12 @@ void civue_begin_frame(civue_ui *ui, civue_vec2 size, f32 scale,
   civue_dl_clear(&ui->base);
   civue_dl_clear(&ui->overlay);
   ui->on_overlay = false;
+  ui->overlay_outside = false;
+
+  if (!ui->screen_known) {
+    ui->screen = rect(0, 0, size.x, size.y);
+  }
+
   ui->repaint = false;
   ui->repaint_at = 0;
   ui->cursor = (civue_cursor){};
@@ -165,7 +171,7 @@ void civue_begin_frame(civue_ui *ui, civue_vec2 size, f32 scale,
 
 const civue_draw_list *civue_frame_list(civue_ui *ui) {
   // most frames draw nothing over the rest.
-  if (!ui->overlay.quads.len) {
+  if (!ui->overlay.quads.len || ui->overlay_apart) {
     return &ui->base;
   }
 
@@ -195,7 +201,7 @@ const civue_draw_list *civue_frame_changes(civue_ui *ui, civue_color clear,
     memcpy(ui->last_generations, generations, sizeof generations);
   }
 
-  if (ui->overlay.quads.len) {
+  if (ui->overlay.quads.len && !ui->overlay_apart) {
     civue_dl_clear(&ui->combined);
     civue_dl_append(&ui->combined, &ui->base);
     civue_dl_append(&ui->combined, &ui->overlay);
@@ -305,6 +311,23 @@ void civue_push_clip(civue_ui *ui, civue_rect r) {
 
 void civue_pop_clip(civue_ui *ui) {
   civue_dl_pop_clip(civue_list(ui));
+}
+
+void civue_push_round(civue_ui *ui, civue_rect r, const f32 radii[4]) {
+  f64 s = ui->scale;
+  f32 scaled[4];
+
+  for (u32 i = 0; i < 4; i++) {
+    scaled[i] = radii[i] * (f32)s;
+  }
+
+  // not snapped to pixels: the curve follows that of the rect drawn.
+  civue_dl_push_round(civue_list(ui),
+                      rect(r.x0 * s, r.y0 * s, r.x1 * s, r.y1 * s), scaled);
+}
+
+void civue_pop_round(civue_ui *ui) {
+  civue_dl_pop_round(civue_list(ui));
 }
 
 civue_rect civue_clip_rect(civue_ui *ui) {

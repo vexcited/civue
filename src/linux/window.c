@@ -220,6 +220,8 @@ static void want() {
   W.wanted = true;
 }
 
+void civue_window_buttons_hidden([[maybe_unused]] bool hidden) {}
+
 void civue_window_wake() {
   woken = true;
   if (wake_fd >= 0) {

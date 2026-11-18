@@ -213,7 +213,7 @@ static id<MTLRenderPipelineState> pipeline(civue_gfx *g, MTLPixelFormat format,
 
   MTLVertexDescriptor *v = [MTLVertexDescriptor vertexDescriptor];
 
-  for (NSUInteger i = 0; i < 8; i++) {
+  for (NSUInteger i = 0; i < 10; i++) {
     v.attributes[i].format = MTLVertexFormatFloat4;
     v.attributes[i].offset = i * 16;
     v.attributes[i].bufferIndex = QUAD_SLOT;

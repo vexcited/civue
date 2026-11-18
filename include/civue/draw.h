@@ -42,7 +42,17 @@ typedef struct {
   float uv[4];
   // cos, sin and pivot of a turn, none when both are zero.
   float turn[4];
+  // x, y, width and height of a rounded clip, and its radii from the top
+  // left clockwise. none when every radius is zero.
+  float round[4];
+  float round_radii[4];
 } civue_quad;
+
+// a rounded clip, laid out as a quad's.
+typedef struct {
+  float rect[4];
+  float radii[4];
+} civue_round;
 
 // where a glyph goes, x, y, width and height, and what of the atlas it
 // shows.
@@ -74,6 +84,7 @@ typedef struct {
   CIVUE_VEC(civue_quad) quads;
   CIVUE_VEC(civue_batch) batches;
   CIVUE_VEC(civue_rect) clips;
+  CIVUE_VEC(civue_round) rounds;
   // what is pushed multiplies what is under it, like a highlighter.
   bool multiply;
   float turn[4];
@@ -90,14 +101,24 @@ void civue_dl_free(civue_draw_list *d);
 void civue_dl_append(civue_draw_list *d, const civue_draw_list *other);
 // draws `count` recorded quads again, moved by `dx` and `dy` pixels. a quad
 // that `was`, the clip when it was recorded, clipped takes the clip of now,
-// any other keeps its own, moved and cut by it. none may be an image or
-// turned.
+// any other keeps its own, moved and cut by it. rounded clips go the same
+// way from `round_was`. none may be an image or turned.
 void civue_dl_replay(civue_draw_list *d, const civue_quad *quads,
-                     uint32_t count, float dx, float dy, const float was[4]);
+                     uint32_t count, float dx, float dy, const float was[4],
+                     const civue_round *round_was);
+// moves everything drawn by `dx` and `dy` pixels, clips too.
+void civue_dl_shift(civue_draw_list *d, float dx, float dy);
 // restricts what follows to `r` until civue_dl_pop_clip.
 void civue_dl_push_clip(civue_draw_list *d, civue_rect r);
 void civue_dl_pop_clip(civue_draw_list *d);
 civue_rect civue_dl_clip(const civue_draw_list *d);
+// rounds the corners of what follows to those of `r` until
+// civue_dl_pop_round. clips to `r` itself are pushed apart. only the last
+// one pushed rounds.
+void civue_dl_push_round(civue_draw_list *d, civue_rect r,
+                         const float radii[4]);
+void civue_dl_pop_round(civue_draw_list *d);
+civue_round civue_dl_round(const civue_draw_list *d);
 // turns what is pushed next by `angle` radians around `pivot`, a zero angle
 // stops turning.
 void civue_dl_set_turn(civue_draw_list *d, float angle, civue_vec2 pivot);
