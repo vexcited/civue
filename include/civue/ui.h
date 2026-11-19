@@ -363,7 +363,8 @@ bool civue_pointer_moved(civue_ui *ui);
 void civue_claim_focus(civue_ui *ui);
 void civue_keep_focus(civue_ui *ui);
 // the focused widget takes a secret this frame: on macos no other app sees
-// its keys and input methods only type roman letters, as a password field.
+// its keys and input methods only type roman letters, on wayland the input
+// method is told it is a password, hidden and not to be stored.
 void civue_claim_secure_input(civue_ui *ui);
 void civue_press_ring(civue_ui *ui);
 bool civue_key_pressed(civue_ui *ui, uint32_t key);

@@ -110,6 +110,8 @@ static struct {
   struct zwp_text_input_manager_v3 *text_inputs;
   struct zwp_text_input_v3 *text_input;
   bool text_on;
+  // the focused widget takes a password, told to the input method.
+  bool text_secure;
   // what the input method sends, applied at its done.
   char *preedit_next, *commit_next;
   civue_rect candidates;
@@ -1459,14 +1461,32 @@ static void text_set(char **slot, const char *text) {
   *slot = text ? xstrdup(text) : nullptr;
 }
 
+// the content type only changes with a committed enable, which also forgets
+// the cursor rectangle.
+static void text_enable(struct zwp_text_input_v3 *t) {
+  zwp_text_input_v3_enable(t);
+
+  if (W.text_secure) {
+    zwp_text_input_v3_set_content_type(
+      t,
+      ZWP_TEXT_INPUT_V3_CONTENT_HINT_HIDDEN_TEXT |
+        ZWP_TEXT_INPUT_V3_CONTENT_HINT_SENSITIVE_DATA,
+      ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_PASSWORD);
+  }
+  else {
+    zwp_text_input_v3_set_content_type(
+      t, ZWP_TEXT_INPUT_V3_CONTENT_HINT_NONE,
+      ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_NORMAL);
+  }
+
+  zwp_text_input_v3_commit(t);
+  W.candidates = (civue_rect){};
+}
+
 static void text_enter(void *data, struct zwp_text_input_v3 *t,
                        struct wl_surface *s) {
-  zwp_text_input_v3_enable(t);
-  zwp_text_input_v3_set_content_type(t, ZWP_TEXT_INPUT_V3_CONTENT_HINT_NONE,
-                                     ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_NORMAL);
-  zwp_text_input_v3_commit(t);
+  text_enable(t);
   W.text_on = true;
-  W.candidates = (civue_rect){};
 }
 
 static void text_leave(void *data, struct zwp_text_input_v3 *t,
@@ -1516,6 +1536,19 @@ static const struct zwp_text_input_v3_listener text_listener = {
   .commit_string = text_commit,
   .delete_surrounding_text = text_delete,
   .done = text_done};
+
+static void set_secure(bool on) {
+  if (W.text_secure == on) {
+    return;
+  }
+
+  W.text_secure = on;
+  W.input.preedit.len = 0;
+
+  if (W.text_on) {
+    text_enable(W.text_input);
+  }
+}
 
 // the input method's candidates open under the pointer.
 static void place_candidates() {
@@ -2061,6 +2094,7 @@ static void frame() {
   target->layout = VK_IMAGE_LAYOUT_UNDEFINED;
   W.frame = (W.frame + 1) % FRAMES;
   update_cursor();
+  set_secure(ui->secure_input);
   if (ui->toggle_maximize && !W.fullscreen) {
     toggle_maximized();
   }
