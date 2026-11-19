@@ -239,6 +239,8 @@ struct civue_ui {
   bool focus_alive;
   // a press this frame leaves the focus where it is.
   bool focus_kept;
+  // the focused widget takes a secret, like a password.
+  bool secure_input;
   // the control the keyboard moved to, a focus ring around it.
   civue_id ring;
   bool has_ring_rect;
@@ -360,6 +362,9 @@ bool civue_under_overlay(civue_ui *ui, civue_vec2 p);
 bool civue_pointer_moved(civue_ui *ui);
 void civue_claim_focus(civue_ui *ui);
 void civue_keep_focus(civue_ui *ui);
+// the focused widget takes a secret this frame: on macos no other app sees
+// its keys and input methods only type roman letters, as a password field.
+void civue_claim_secure_input(civue_ui *ui);
 void civue_press_ring(civue_ui *ui);
 bool civue_key_pressed(civue_ui *ui, uint32_t key);
 bool civue_key_held(civue_ui *ui, uint32_t key);

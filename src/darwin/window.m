@@ -1,4 +1,5 @@
 #import <AppKit/AppKit.h>
+#import <Carbon/Carbon.h>
 #import <IOSurface/IOSurface.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
@@ -89,6 +90,8 @@ static struct {
   f64 timer_at;
   // the input method's composed text.
   NSString *marked;
+  // secure event input is on for a focused password field.
+  bool secure;
   // a live resize draws each size at once, in the resize's transaction.
   bool resizing;
 
@@ -321,6 +324,7 @@ static void set_cursor(civue_cursor c) {
 }
 
 static void schedule_timer(f64 at);
+static void set_secure(bool on);
 static void draw_strip(id<MTLCommandBuffer> cb, const civue_draw_list *list);
 static f64 bar_height();
 static void show_as_srgb(CAMetalLayer *layer);
@@ -908,6 +912,8 @@ static void frame() {
       set_cursor(ui->cursor);
     }
 
+    set_secure(ui->secure_input && W.window.keyWindow);
+
     // a full screen window neither moves nor zooms.
     if (ui->drag_window && !W.full_screen) {
       NSEvent *e = W.app.currentEvent;
@@ -992,6 +998,42 @@ static void start_link() {
   pace_link();
   W.link.paused = !W.wanted;
   [W.link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+}
+
+// as appkit's password fields: while one takes keys the other apps' event
+// taps do not see them, and the input methods are roman ones so none shows
+// the secret in its candidates. the header asks to turn it off when the app
+// goes inactive.
+static void set_secure(bool on) {
+  if (W.secure == on) {
+    return;
+  }
+
+  W.secure = on;
+  NSTextInputContext *context = W.view.inputContext;
+
+  // the allowed input sources are read as the context activates.
+  bool current = NSTextInputContext.currentInputContext == context;
+
+  if (current) {
+    [context deactivate];
+  }
+
+  if (on) {
+    EnableSecureEventInput();
+    [context discardMarkedText];
+    [W.view unmarkText];
+    context.allowedInputSourceLocales =
+      @[ NSAllRomanInputSourcesLocaleIdentifier ];
+  }
+  else {
+    DisableSecureEventInput();
+    context.allowedInputSourceLocales = nil;
+  }
+
+  if (current) {
+    [context activate];
+  }
 }
 
 static void schedule_timer(f64 at) {
@@ -1792,6 +1834,7 @@ static void exited_full_screen() {
 }
 
 - (void)windowDidResignKey:(NSNotification *)note {
+  set_secure(false);
   W.input.held.len = 0;
   memset(W.input.down, 0, sizeof W.input.down);
   want();

@@ -143,6 +143,7 @@ void civue_begin_frame(civue_ui *ui, civue_vec2 size, f32 scale,
   ui->close_window = false;
   ui->focus_alive = false;
   ui->focus_kept = false;
+  ui->secure_input = false;
   ui->frames++;
   ui->rerun = ui->frames > 1 && !ui->settled;
   ui->scroll_areas = 0;
@@ -424,6 +425,10 @@ void civue_claim_focus(civue_ui *ui) {
 
 void civue_keep_focus(civue_ui *ui) {
   ui->focus_kept = true;
+}
+
+void civue_claim_secure_input(civue_ui *ui) {
+  ui->secure_input = true;
 }
 
 void civue_press_ring(civue_ui *ui) {

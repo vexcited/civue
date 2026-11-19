@@ -374,7 +374,7 @@ if(APPLE)
     "-framework QuartzCore" "-framework CoreText" "-framework IOSurface"
     "-framework CoreGraphics" "-framework ImageIO"
     "-framework CoreFoundation" "-framework UniformTypeIdentifiers"
-    "-framework WebKit" objc)
+    "-framework WebKit" "-framework Carbon" objc)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_library(civue STATIC ${CIVUE_SOURCES} ${CIVUE_LINUX_SOURCES})
   target_compile_definitions(civue PRIVATE _GNU_SOURCE)
