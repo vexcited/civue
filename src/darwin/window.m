@@ -472,9 +472,10 @@ static IOSurfaceRef make_surface(u32 pw, u32 ph) {
 
 // a surface to draw the next frame into: not the one shown, nor one the
 // window server may still be reading, which gives its place to a new one
-// when there is no other.
+// when there is no other. a third one made while the window server was
+// slow goes once it is free again: two are enough at any other time.
 static int free_surface(u32 pw, u32 ph) {
-  int empty = -1, busy = -1;
+  int empty = -1, busy = -1, found = -1;
 
   for (int i = 0; i < (int)countof(W.surfaces); i++) {
     if (i == W.shown) {
@@ -484,12 +485,20 @@ static int free_surface(u32 pw, u32 ph) {
     if (!W.surfaces[i].io) {
       empty = i;
     }
-    else if (!IOSurfaceIsInUse(W.surfaces[i].io)) {
-      return i;
-    }
-    else {
+    else if (IOSurfaceIsInUse(W.surfaces[i].io)) {
       busy = i;
     }
+    else if (found < 0) {
+      found = i;
+    }
+    else {
+      CFRelease(W.surfaces[i].io);
+      W.surfaces[i].io = nullptr;
+    }
+  }
+
+  if (found >= 0) {
+    return found;
   }
 
   if (empty < 0) {
