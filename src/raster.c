@@ -307,15 +307,35 @@ static bool same_batches(const civue_draw_list *a, const civue_draw_list *b) {
   return true;
 }
 
-// no image nor multiplying: a quad draws the same wherever it is in the list.
-static bool plain(const civue_draw_list *l) {
-  vec_each(&l->batches, b) {
-    if (b->texture || b->multiply) {
-      return false;
+// the batch of a list's quad.
+static const civue_batch *batch_at(const civue_draw_list *l, u32 quad) {
+  u32 lo = 0, hi = l->batches.len;
+
+  while (hi - lo > 1) {
+    u32 mid = (lo + hi) / 2;
+
+    if (l->batches.v[mid].start <= quad) {
+      lo = mid;
+    }
+    else {
+      hi = mid;
     }
   }
 
-  return true;
+  return &l->batches.v[lo];
+}
+
+// whether a quad of each list draws the same: itself, its image and how it
+// blends.
+static bool same_drawn(const civue_draw_list *a, u32 i,
+                       const civue_draw_list *b, u32 j) {
+  if (!same_quad(&a->quads.v[i], &b->quads.v[j])) {
+    return false;
+  }
+
+  const civue_batch *x = batch_at(a, i), *y = batch_at(b, j);
+
+  return x->texture == y->texture && x->multiply == y->multiply;
 }
 
 // past this many changed quads the whole window is drawn again: telling
@@ -332,7 +352,7 @@ void civue_damage_between(const civue_draw_list *last,
   u32 n = last->quads.len, m = next->quads.len;
   u32 changed = 0;
 
-  if (n == m && same_batches(last, next)) {
+  if (n == m && (same_batches(last, next) || n == 0)) {
     for (u32 i = 0; i < n; i++) {
       if (same_quad(&a[i], &b[i])) {
         continue;
@@ -347,17 +367,34 @@ void civue_damage_between(const civue_draw_list *last,
       civue_damage_add(out, bounds(&b[i], window));
     }
   }
-  else if (plain(last) && plain(next)) {
+  else if (n == m) {
+    // as many quads in other batches: an image came in place of what stood
+    // for it.
+    for (u32 i = 0; i < n; i++) {
+      if (same_drawn(last, i, next, i)) {
+        continue;
+      }
+
+      if (++changed > CHANGES) {
+        out->all = true;
+        break;
+      }
+
+      civue_damage_add(out, bounds(&a[i], window));
+      civue_damage_add(out, bounds(&b[i], window));
+    }
+  }
+  else if (n && m) {
     // quads came or went: what is between those both lists start and end
-    // with.
+    // with, an image's quads with the same image.
     u32 least = MIN(n, m), head = 0, tail = 0;
 
-    while (head < least && same_quad(&a[head], &b[head])) {
+    while (head < least && same_drawn(last, head, next, head)) {
       head++;
     }
 
     while (tail < least - head &&
-           same_quad(&a[n - 1 - tail], &b[m - 1 - tail])) {
+           same_drawn(last, n - 1 - tail, next, m - 1 - tail)) {
       tail++;
     }
 
