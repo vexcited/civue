@@ -61,15 +61,25 @@ typedef struct {
   size_t stride;
 } civue_surface;
 
+// where the cpu finds the pixels of the images a list draws: `find` is false
+// for a texture only the gpu has.
+typedef struct {
+  bool (*find)(void *ctx, civue_texture t, civue_pixels *out);
+  void *ctx;
+} civue_raster_images;
+
 // how much drawing `damage` of `list` takes, in pixels filled, or false when
-// something there is only drawn by the gpu.
+// something there is only drawn by the gpu. `images` may be null, images are
+// then the gpu's.
 bool civue_raster_cost(const civue_draw_list *list, const civue_damage *damage,
-                       uint32_t width, uint32_t height, uint64_t *cost);
+                       uint32_t width, uint32_t height,
+                       const civue_raster_images *images, uint64_t *cost);
 // draws `damage` of `list` over `clear`, as civue_gfx_encode does on the
-// gpu. the atlases keep their pixels.
+// gpu. the atlases keep their pixels, and `images` finds the images'.
 void civue_raster(const civue_surface *s, const civue_draw_list *list,
                   civue_color clear, const civue_damage *damage,
-                  const civue_atlas *mask, const civue_atlas *color);
+                  const civue_atlas *mask, const civue_atlas *color,
+                  const civue_raster_images *images);
 
 #ifdef __cplusplus
 }

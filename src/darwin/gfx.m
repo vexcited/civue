@@ -25,6 +25,24 @@ constexpr NSUInteger QUAD_SLOT = 1;
 @implementation CivueBusy
 @end
 
+// an image civue uploaded, with its pixels where the cpu reads them: the
+// buffer its texture is made over on apple's gpus, a copy on the others.
+@interface CivueImage : NSObject {
+@public
+  id<MTLBuffer> buffer;
+  u8 *own;
+  civue_pixels pixels;
+}
+@end
+
+@implementation CivueImage
+
+- (void)dealloc {
+  free(own);
+}
+
+@end
+
 // a buffer for a frame's quads, kept for the next frames instead of made and
 // freed each time. it is busy from encoding until the gpu is done with it.
 typedef struct {
@@ -54,7 +72,7 @@ struct civue_gfx {
   id<MTLTexture> dummy;
   NSMutableDictionary<NSNumber *, id<MTLTexture>> *images;
   // the images civue uploaded itself, whose pixels never change.
-  NSMutableSet<NSNumber *> *uploaded;
+  NSMutableDictionary<NSNumber *, CivueImage *> *uploaded;
   civue_texture next_id;
 };
 
@@ -133,7 +151,7 @@ civue_gfx *civue_gfx_new(void *device) {
   g->atlas.reusing_ctx = g->color_atlas.reusing_ctx =
     (__bridge void *)g->readers;
   g->images = [NSMutableDictionary dictionary];
-  g->uploaded = [NSMutableSet set];
+  g->uploaded = [NSMutableDictionary dictionary];
   g->atlas.bytes_per_pixel = 1;
   g->color_atlas.bytes_per_pixel = 4;
   g->atlas.keeps = g->color_atlas.keeps = true;
@@ -254,35 +272,95 @@ civue_texture civue_gfx_register_texture(civue_gfx *g, void *t) {
 void civue_gfx_update_texture(civue_gfx *g, civue_texture tid, void *t) {
   if (g->images[@(tid)]) {
     g->images[@(tid)] = (__bridge id<MTLTexture>)t;
-    [g->uploaded removeObject:@(tid)];
+    [g->uploaded removeObjectForKey:@(tid)];
   }
 }
 
 void civue_gfx_free_texture(civue_gfx *g, civue_texture tid) {
   [g->images removeObjectForKey:@(tid)];
-  [g->uploaded removeObject:@(tid)];
+  [g->uploaded removeObjectForKey:@(tid)];
+}
+
+// a texture over a buffer the cpu reads too, with apple's gpus: the cpu
+// draws its image with no second copy of its pixels.
+static id<MTLTexture> buffer_texture(id<MTLDevice> device, CivueImage *image,
+                                     u32 w, u32 h, const u8 *rgba) {
+  MTLPixelFormat format = MTLPixelFormatRGBA8Unorm;
+  usize row = (usize)w * 4;
+
+  if (!device.hasUnifiedMemory || !w || !h) {
+    return nil;
+  }
+
+  NSUInteger align =
+    [device minimumLinearTextureAlignmentForPixelFormat:format];
+  NSUInteger stride = (row + align - 1) / align * align;
+
+  image->buffer = [device newBufferWithLength:stride * h
+                                      options:MTLResourceStorageModeShared];
+
+  if (!image->buffer) {
+    return nil;
+  }
+
+  u8 *pixels = image->buffer.contents;
+
+  for (u32 y = 0; y < h; y++) {
+    memcpy(pixels + y * stride, rgba + y * row, row);
+  }
+
+  MTLTextureDescriptor *d =
+    [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format
+                                                       width:w
+                                                      height:h
+                                                   mipmapped:NO];
+  d.usage = MTLTextureUsageShaderRead;
+  d.storageMode = MTLStorageModeShared;
+  image->pixels = (civue_pixels){pixels, w, h, stride};
+  return [image->buffer newTextureWithDescriptor:d offset:0 bytesPerRow:stride];
 }
 
 civue_texture civue_gfx_upload_image(civue_gfx *g, u32 w, u32 h,
                                      const u8 *rgba) {
-  id<MTLTexture> t =
-    written_texture(device_of(g), MTLPixelFormatRGBA8Unorm, w, h);
+  CivueImage *image = [CivueImage new];
+  id<MTLTexture> t = buffer_texture(device_of(g), image, w, h, rgba);
 
-  if (w && h) {
-    [t replaceRegion:MTLRegionMake2D(0, 0, w, h)
-         mipmapLevel:0
-           withBytes:rgba
-         bytesPerRow:(NSUInteger)w * 4];
+  if (!t) {
+    usize len = (usize)w * h * 4;
+
+    t = written_texture(device_of(g), MTLPixelFormatRGBA8Unorm, w, h);
+
+    if (w && h) {
+      [t replaceRegion:MTLRegionMake2D(0, 0, w, h)
+           mipmapLevel:0
+             withBytes:rgba
+           bytesPerRow:(NSUInteger)w * 4];
+    }
+
+    image->own = xmalloc(len ? len : 1);
+    memcpy(image->own, rgba, len);
+    image->pixels = (civue_pixels){image->own, w, h, (usize)w * 4};
   }
 
   civue_texture tid = civue_gfx_register_texture(g, (__bridge void *)t);
-  [g->uploaded addObject:@(tid)];
+  g->uploaded[@(tid)] = image;
   return tid;
+}
+
+bool civue_gfx_pixels(civue_gfx *g, civue_texture tid, civue_pixels *out) {
+  CivueImage *image = g->uploaded[@(tid)];
+
+  if (!image) {
+    return false;
+  }
+
+  *out = image->pixels;
+  return true;
 }
 
 bool civue_gfx_static(civue_gfx *g, const civue_draw_list *list) {
   vec_each(&list->batches, b) {
-    if (b->texture && ![g->uploaded containsObject:@(b->texture)]) {
+    if (b->texture && !g->uploaded[@(b->texture)]) {
       return false;
     }
   }

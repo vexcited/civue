@@ -201,6 +201,13 @@ typedef struct {
   void *reusing_ctx;
 } civue_atlas;
 
+// an image's pixels the cpu reads: premultiplied rgba8, rows from the top.
+typedef struct {
+  const uint8_t *pixels;
+  uint32_t width, height;
+  size_t stride;
+} civue_pixels;
+
 // room for a w by h bitmap, its uv returned, false when full. `data` is copied.
 bool civue_atlas_insert(civue_atlas *a, uint32_t w, uint32_t h,
                         const uint8_t *data, float uv[4]);

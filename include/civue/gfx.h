@@ -41,6 +41,9 @@ void civue_gfx_free_texture(civue_gfx *g, civue_texture id);
 // uploads premultiplied rgba8 pixels and registers them.
 civue_texture civue_gfx_upload_image(civue_gfx *g, uint32_t width,
                                      uint32_t height, const uint8_t *rgba);
+// the pixels of an image civue_gfx_upload_image made, for drawing on the cpu.
+// false for other textures, and where the cpu cannot read them.
+bool civue_gfx_pixels(civue_gfx *g, civue_texture id, civue_pixels *out);
 // encodes `list` over `target`, id<MTLTexture> or civue_vk_tex, in the command
 // buffer `cb`, cleared first when `clear` is given.
 // whether every image `list` draws is one civue_gfx_upload_image made, whose

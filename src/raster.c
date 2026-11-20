@@ -623,6 +623,10 @@ typedef struct {
   bool multiply;
   // the pixel of the color under everything.
   u32 clear;
+  // where images are found, and the one the batch drawn now shows.
+  const civue_raster_images *images;
+  civue_texture texture;
+  civue_pixels image;
 } Raster;
 
 // where a quad's point is in an atlas.
@@ -670,6 +674,62 @@ static void color_at(const Raster *r, const civue_quad *q, f32 x, f32 y,
   for (u32 i = 0; i < 4; i++) {
     f32 top = rows[0][x0 * 4 + i] * (1 - fx) + rows[0][x1 * 4 + i] * fx;
     f32 bottom = rows[1][x0 * 4 + i] * (1 - fx) + rows[1][x1 * 4 + i] * fx;
+
+    out[i] = (top * (1 - fy) + bottom * fy) / 255.0f;
+  }
+}
+
+// the image between its texels, or at the nearest one, as the gpu samples
+// it: clamped to its edges.
+// where a point of an image's quad is in its texels, across and down.
+static f32 image_u(const civue_quad *q, const civue_pixels *im, f32 x) {
+  f32 tx = (x - q->rect[0]) / q->rect[2];
+
+  return (q->uv[0] + (q->uv[2] - q->uv[0]) * tx) * (f32)im->width;
+}
+
+static f32 image_v(const civue_quad *q, const civue_pixels *im, f32 y) {
+  f32 ty = (y - q->rect[1]) / q->rect[3];
+
+  return (q->uv[1] + (q->uv[3] - q->uv[1]) * ty) * (f32)im->height;
+}
+
+static void image_at(const Raster *r, const civue_quad *q, f32 x, f32 y,
+                     f32 out[4]) {
+  const civue_pixels *im = &r->image;
+
+  memset(out, 0, 4 * sizeof *out);
+
+  if (!im->pixels || !im->width || !im->height) {
+    return;
+  }
+
+  f32 u = image_u(q, im, x), v = image_v(q, im, y);
+  f32 w1 = (f32)(im->width - 1), h1 = (f32)(im->height - 1);
+
+  if (q->params[3] > 0.5f) {
+    const u8 *p = im->pixels + (usize)clampf(floorf(v), 0, h1) * im->stride +
+                  (usize)clampf(floorf(u), 0, w1) * 4;
+
+    for (u32 i = 0; i < 4; i++) {
+      out[i] = p[i] / 255.0f;
+    }
+
+    return;
+  }
+
+  u -= 0.5f, v -= 0.5f;
+
+  f32 fx = fract(u), fy = fract(v);
+  usize x0 = (usize)clampf(floorf(u), 0, w1) * 4;
+  usize x1 = (usize)clampf(floorf(u) + 1, 0, w1) * 4;
+  const u8 *rows[2] = {
+    im->pixels + (usize)clampf(floorf(v), 0, h1) * im->stride,
+    im->pixels + (usize)clampf(floorf(v) + 1, 0, h1) * im->stride};
+
+  for (u32 i = 0; i < 4; i++) {
+    f32 top = rows[0][x0 + i] * (1 - fx) + rows[0][x1 + i] * fx;
+    f32 bottom = rows[1][x0 + i] * (1 - fx) + rows[1][x1 + i] * fx;
 
     out[i] = (top * (1 - fy) + bottom * fy) / 255.0f;
   }
@@ -751,6 +811,29 @@ static bool shade_kind(const Raster *r, const civue_quad *q, f32 x, f32 y,
     case CIVUE_QUAD_RECT:
       shade_rect(q, x, y, out);
       return true;
+
+    case CIVUE_QUAD_IMAGE: {
+      f32 c[4];
+      image_at(r, q, x, y, c);
+
+      if (q->params[2] > 0.5f) {
+        pixel_grid(c, x, y, q->border, out);
+        return true;
+      }
+
+      // canvas tiles cover their pixels whole, so neighbors meet seamlessly.
+      if (q->params[0] > 0.5f) {
+        scaled(c, q->color[3], out);
+        return true;
+      }
+
+      f32 hx = q->rect[2] * 0.5f, hy = q->rect[3] * 0.5f;
+      f32 px = x - q->rect[0] - hx, py = y - q->rect[1] - hy;
+
+      scaled(c, q->color[3], out);
+      scaled(out, clamp01(0.5f - sd_rounded(px, py, hx, hy, q->radii)), out);
+      return true;
+    }
 
     default:
       return false;
@@ -990,9 +1073,14 @@ static Flat flat(const civue_quad *q) {
   };
 }
 
-static bool is_flat(const civue_quad *q) {
-  return (u32)q->params[1] == CIVUE_QUAD_RECT && !turned(q) && !rounded(q) &&
+// a rect drawn in rows, past what a rounded clip cuts.
+static bool flat_rect(const civue_quad *q) {
+  return (u32)q->params[1] == CIVUE_QUAD_RECT && !turned(q) &&
          q->params[2] <= 0.5f;
+}
+
+static bool is_flat(const civue_quad *q) {
+  return flat_rect(q) && !rounded(q);
 }
 
 // a rounded rect, its curves and edges asked a pixel at a time and the
@@ -1018,8 +1106,190 @@ static bool opaque_rect(const civue_quad *q) {
          q->radii[3] == 0;
 }
 
+#ifdef __ARM_NEON
+// what shade_rect works out once for a quad: its rounded rect, and the one
+// inside its border.
+typedef struct {
+  f32 hx, hy, radii[4];
+  // 0 without a border, 1 for one as wide on each side, -1 for sides of
+  // their own, whose inside has a center of its own and is none when flat.
+  i32 border;
+  bool no_inside;
+  f32 ihx, ihy, icx, icy, iradii[4];
+  // blue, green, red and alpha, as the pixels have them.
+  float32x4_t color, edge;
+} RectShape;
+
+static RectShape rect_shape(const civue_quad *q) {
+  RectShape s = {
+    .hx = q->rect[2] * 0.5f,
+    .hy = q->rect[3] * 0.5f,
+    .color = {q->color[2], q->color[1], q->color[0], q->color[3]},
+    .edge = {q->border[2], q->border[1], q->border[0], q->border[3]},
+  };
+  f32 bw = q->params[0];
+
+  memcpy(s.radii, q->radii, sizeof s.radii);
+
+  if (bw < 0) {
+    f32 t[4];
+
+    for (u32 i = 0; i < 4; i++) {
+      t[i] = q->uv[i] == 0 ? -1 : q->uv[i];
+    }
+
+    s.border = -1;
+    s.ihx = fmaxf((q->rect[2] - (t[3] + t[1])) * 0.5f, 0);
+    s.ihy = fmaxf((q->rect[3] - (t[0] + t[2])) * 0.5f, 0);
+    s.icx = q->rect[0] + t[3] + s.ihx;
+    s.icy = q->rect[1] + t[0] + s.ihy;
+    s.no_inside = s.ihx <= 0 || s.ihy <= 0;
+
+    f32 wider[4] = {fmaxf(t[0], t[3]), fmaxf(t[0], t[1]), fmaxf(t[2], t[1]),
+                    fmaxf(t[2], t[3])};
+
+    for (u32 i = 0; i < 4; i++) {
+      s.iradii[i] = fmaxf(q->radii[i] - wider[i], 0);
+    }
+  }
+  else if (bw > 0) {
+    s.border = 1;
+    s.ihx = fmaxf(s.hx - bw, 0);
+    s.ihy = fmaxf(s.hy - bw, 0);
+
+    for (u32 i = 0; i < 4; i++) {
+      s.iradii[i] = fmaxf(q->radii[i] - bw, 0);
+    }
+  }
+
+  return s;
+}
+
+// sd_rounded at four points.
+static float32x4_t sd_rounded4(float32x4_t px, float32x4_t py, f32 hx, f32 hy,
+                               const f32 radii[4]) {
+  uint32x4_t right = vcgtq_f32(px, vdupq_n_f32(0));
+  uint32x4_t below = vcgtq_f32(py, vdupq_n_f32(0));
+  float32x4_t top =
+    vbslq_f32(right, vdupq_n_f32(radii[1]), vdupq_n_f32(radii[0]));
+  float32x4_t bottom =
+    vbslq_f32(right, vdupq_n_f32(radii[2]), vdupq_n_f32(radii[3]));
+  float32x4_t r =
+    vminq_f32(vbslq_f32(below, bottom, top), vdupq_n_f32(fminf(hx, hy)));
+  float32x4_t qx = vaddq_f32(vsubq_f32(vabsq_f32(px), vdupq_n_f32(hx)), r);
+  float32x4_t qy = vaddq_f32(vsubq_f32(vabsq_f32(py), vdupq_n_f32(hy)), r);
+  float32x4_t mx = vmaxq_f32(qx, vdupq_n_f32(0));
+  float32x4_t my = vmaxq_f32(qy, vdupq_n_f32(0));
+  float32x4_t len = vsqrtq_f32(vfmaq_f32(vmulq_f32(my, my), mx, mx));
+
+  return vsubq_f32(vaddq_f32(vminq_f32(vmaxq_f32(qx, qy), vdupq_n_f32(0)), len),
+                   r);
+}
+
+static float32x4_t coverage4(float32x4_t sd) {
+  return vminq_f32(vmaxq_f32(vsubq_f32(vdupq_n_f32(0.5f), sd), vdupq_n_f32(0)),
+                   vdupq_n_f32(1));
+}
+
+// a premultiplied color, blue first, over a pixel: blend's own math.
+static void blend_bgra(u8 *d, float32x4_t c) {
+  u32 was;
+  memcpy(&was, d, sizeof was);
+
+  f32 inv = 1 - vgetq_lane_f32(c, 3);
+  float32x4_t over = vmulq_n_f32(c, 255);
+  uint16x8_t wide = vmovl_u8(vcreate_u8(was));
+  float32x4_t under = vcvtq_f32_u32(vmovl_u16(vget_low_u16(wide)));
+  float32x4_t sum =
+    vaddq_f32(vaddq_f32(over, vmulq_n_f32(under, inv)), vdupq_n_f32(0.5f));
+  uint16x4_t narrow = vqmovn_u32(vcvtq_u32_f32(sum));
+  u32 now = vget_lane_u32(
+    vreinterpret_u32_u8(vqmovn_u16(vcombine_u16(narrow, narrow))), 0);
+
+  memcpy(d, &now, sizeof now);
+}
+#endif
+
+// pixels x0 to x1 of a row of a rect, each asked: four at a time with neon.
+static void rect_run(const Raster *r, const civue_quad *q, const void *shape,
+                     i32 y, i32 x0, i32 x1) {
+  u8 *d = pixel(r->s, x0, y);
+  i32 x = x0;
+
+#ifdef __ARM_NEON
+  const RectShape *s = shape;
+
+  if (s) {
+    f32 fy = (f32)y + 0.5f;
+    float32x4_t py = vdupq_n_f32(fy - q->rect[1] - s->hy);
+    float32x4_t iy = vdupq_n_f32(fy - s->icy);
+
+    for (; x + 4 <= x1; x += 4, d += 16) {
+      float32x4_t fx =
+        vaddq_f32(vdupq_n_f32((f32)x), (float32x4_t){0.5f, 1.5f, 2.5f, 3.5f});
+      float32x4_t px =
+        vsubq_f32(vsubq_f32(fx, vdupq_n_f32(q->rect[0])), vdupq_n_f32(s->hx));
+      float32x4_t outer =
+        coverage4(sd_rounded4(px, py, s->hx, s->hy, s->radii));
+      float32x4_t inner = vdupq_n_f32(1);
+
+      if (s->border < 0) {
+        inner = s->no_inside
+                  ? vdupq_n_f32(0)
+                  : coverage4(sd_rounded4(vsubq_f32(fx, vdupq_n_f32(s->icx)),
+                                          iy, s->ihx, s->ihy, s->iradii));
+      }
+      else if (s->border > 0) {
+        inner = coverage4(sd_rounded4(px, py, s->ihx, s->ihy, s->iradii));
+      }
+
+      f32 o[4], in[4];
+      vst1q_f32(o, outer);
+      vst1q_f32(in, inner);
+
+      for (u32 i = 0; i < 4; i++) {
+        // nothing over the pixel leaves it as it was.
+        if (o[i] == 0) {
+          continue;
+        }
+
+        float32x4_t c =
+          s->border ? vmulq_n_f32(vaddq_f32(vmulq_n_f32(s->edge, 1 - in[i]),
+                                            vmulq_n_f32(s->color, in[i])),
+                                  o[i])
+                    : vmulq_n_f32(s->color, o[i]);
+
+        blend_bgra(d + i * 4, c);
+      }
+    }
+  }
+#else
+  (void)shape;
+#endif
+
+  for (; x < x1; x++, d += 4) {
+    f32 c[4];
+    shade_rect(q, (f32)x + 0.5f, (f32)y + 0.5f, c);
+    blend(d, c, r->multiply);
+  }
+}
+
+static void whole_span(const civue_quad *q, f32 cy, i32 *from, i32 *to);
+
 static void rect_quad(const Raster *r, const civue_quad *q, civue_box b) {
   Flat f = flat(q);
+#ifdef __ARM_NEON
+  // pixel grids and multiplying are asked a pixel at a time.
+  RectShape shape;
+  const void *vector = nullptr;
+
+  if (q->params[2] <= 0.5f && !r->multiply) {
+    shape = rect_shape(q);
+    vector = &shape;
+  }
+#else
+  const void *vector = nullptr;
+#endif
   f32 inside[4];
   // its color as it is where the rect is whole, whatever was there.
   bool has_inside = opaque_rect(q);
@@ -1034,13 +1304,25 @@ static void rect_quad(const Raster *r, const civue_quad *q, civue_box b) {
     f32 to = whole ? f.whole[2] : f.mid[2];
     i32 a = (i32)clampf(from, (f32)b.x0, (f32)b.x1);
     i32 e = (i32)clampf(to, (f32)a, (f32)b.x1);
-    u8 *d = pixel(r->s, b.x0, y);
 
-    for (i32 x = b.x0; x < a; x++, d += 4) {
-      f32 c[4];
-      shade_rect(q, (f32)x + 0.5f, (f32)y + 0.5f, c);
-      blend(d, c, r->multiply);
+    // a row through the curves of a rect without a border, a circle's
+    // all of them, is whole between them.
+    if (!whole && q->params[0] == 0 && q->params[2] <= 0.5f) {
+      i32 wa, we;
+
+      whole_span(q, (f32)y + 0.5f, &wa, &we);
+      wa = MAX(wa, b.x0);
+      we = MIN(we, b.x1);
+
+      if (we - wa > e - a) {
+        rect_run(r, q, vector, y, b.x0, wa);
+        span(r, y, wa, we, q->color);
+        rect_run(r, q, vector, y, we, b.x1);
+        continue;
+      }
     }
+
+    rect_run(r, q, vector, y, b.x0, a);
 
     if (a < e) {
       f32 c[4];
@@ -1063,13 +1345,7 @@ static void rect_quad(const Raster *r, const civue_quad *q, civue_box b) {
       }
     }
 
-    d = pixel(r->s, e, y);
-
-    for (i32 x = e; x < b.x1; x++, d += 4) {
-      f32 c[4];
-      shade_rect(q, (f32)x + 0.5f, (f32)y + 0.5f, c);
-      blend(d, c, r->multiply);
-    }
+    rect_run(r, q, vector, y, e, b.x1);
   }
 }
 
@@ -1462,13 +1738,72 @@ static void shadow_quad(const Raster *r, const civue_quad *q, civue_box b) {
   }
 }
 
-static void quad(const Raster *r, const civue_quad *q) {
-  u32 kind = (u32)q->params[1];
+// the pixels of `b` a rounded clip may cut, at most one box a corner and
+// none over another. the others are the rect clip's alone.
+static u32 corner_boxes(const civue_quad *q, civue_box b, civue_box out[4]) {
+  f32 hx = q->round[2] * 0.5f, hy = q->round[3] * 0.5f;
+  f32 cx = q->round[0] + hx, cy = q->round[1] + hy;
+  f32 x0 = q->round[0], y0 = q->round[1];
+  f32 x1 = x0 + q->round[2], y1 = y0 + q->round[3];
+  // the pixels whose center is left of the middle, and above it.
+  i32 sx = (i32)ceilf(cx - 0.5f), sy = (i32)ceilf(cy - 0.5f);
+  u32 n = 0;
 
-  if (kind == CIVUE_QUAD_IMAGE) {
-    return;
+  // top left, top right, bottom right, bottom left, a pixel to spare.
+  for (u32 i = 0; i < 4; i++) {
+    f32 r = fminf(q->round_radii[i], fminf(hx, hy));
+
+    if (!(r > 0)) {
+      continue;
+    }
+
+    bool right = i == 1 || i == 2, bottom = i >= 2;
+    civue_box c = {
+      right ? MAX((i32)floorf(x1 - r - 0.5f), sx) : b.x0,
+      bottom ? MAX((i32)floorf(y1 - r - 0.5f), sy) : b.y0,
+      right ? b.x1 : MIN((i32)ceilf(x0 + r - 0.5f) + 1, sx),
+      bottom ? b.y1 : MIN((i32)ceilf(y0 + r - 0.5f) + 1, sy),
+    };
+
+    c = cut(c, b);
+
+    if (!empty(c)) {
+      out[n++] = c;
+    }
   }
 
+  return n;
+}
+
+// what of `b` is not in `c`, in at most four boxes.
+static u32 without(civue_box b, civue_box c, civue_box out[4]) {
+  civue_box in = cut(b, c);
+  u32 n = 0;
+
+  if (empty(in)) {
+    out[0] = b;
+    return 1;
+  }
+
+  civue_box parts[4] = {
+    {b.x0, b.y0, b.x1, in.y0},
+    {b.x0, in.y1, b.x1, b.y1},
+    {b.x0, in.y0, in.x0, in.y1},
+    {in.x1, in.y0, b.x1, in.y1},
+  };
+
+  for (u32 i = 0; i < 4; i++) {
+    if (!empty(parts[i])) {
+      out[n++] = parts[i];
+    }
+  }
+
+  return n;
+}
+
+static void plain_quad(const Raster *r, const civue_quad *q, civue_box b);
+
+static void quad(const Raster *r, const civue_quad *q) {
   if (turned(q)) {
     each_turned(r, q);
     return;
@@ -1480,11 +1815,284 @@ static void quad(const Raster *r, const civue_quad *q) {
     return;
   }
 
-  // rounded off, its pixels are each asked.
-  if (rounded(q)) {
-    each(r, q, b);
+  if (!rounded(q)) {
+    plain_quad(r, q, b);
+    return;
   }
-  else if (is_flat(q)) {
+
+  // rounded off, the pixels at its corners are each asked, and the rest
+  // draws as it would unrounded.
+  civue_box corners[4], rest[64];
+  u32 ncorners = corner_boxes(q, b, corners), nrest = 1;
+
+  rest[0] = b;
+
+  for (u32 i = 0; i < ncorners; i++) {
+    each(r, q, corners[i]);
+
+    civue_box next[64];
+    u32 n = 0;
+
+    for (u32 k = 0; k < nrest; k++) {
+      n += without(rest[k], corners[i], next + n);
+    }
+
+    memcpy(rest, next, n * sizeof *next);
+    nrest = n;
+  }
+
+  for (u32 k = 0; k < nrest; k++) {
+    plain_quad(r, q, rest[k]);
+  }
+}
+
+// whether an image's quad shows its texels one for a pixel, at whole
+// pixels, and how far its texels are from the pixels they land on.
+static bool image_one_to_one(const civue_pixels *im, const civue_quad *q,
+                             i32 *ox, i32 *oy) {
+  if (!im->pixels || !im->width || !im->height || q->params[2] > 0.5f) {
+    return false;
+  }
+
+  f32 w = (f32)im->width, h = (f32)im->height;
+  f32 u0 = q->uv[0] * w, v0 = q->uv[1] * h;
+
+  if (!whole(q->rect[0]) || !whole(q->rect[1]) || !whole(u0) || !whole(v0) ||
+      q->uv[2] * w - u0 != q->rect[2] || q->uv[3] * h - v0 != q->rect[3]) {
+    return false;
+  }
+
+  *ox = (i32)u0 - (i32)q->rect[0];
+  *oy = (i32)v0 - (i32)q->rect[1];
+  return true;
+}
+
+// where a row of a rounded rect covers its pixels whole: from the first
+// pixel to the one past the last, a pixel kept from each end so that what
+// the rounding asks is never guessed.
+static void whole_span(const civue_quad *q, f32 cy, i32 *from, i32 *to) {
+  f32 x0 = q->rect[0], y0 = q->rect[1];
+  f32 x1 = x0 + q->rect[2], y1 = y0 + q->rect[3];
+  f32 hx = q->rect[2] * 0.5f, hy = q->rect[3] * 0.5f;
+  f32 left = x0 + 0.5f, right = x1 - 0.5f;
+
+  if (cy < y0 + 0.5f || cy > y1 - 0.5f) {
+    *from = *to = 0;
+    return;
+  }
+
+  // the corners from the top left clockwise.
+  for (u32 i = 0; i < 4; i++) {
+    f32 r = fminf(q->radii[i], fminf(hx, hy));
+    bool bottom = i >= 2, right_side = i == 1 || i == 2;
+    f32 dy = bottom ? cy - (y1 - r) : (y0 + r) - cy;
+
+    if (!(r > 0) || dy <= 0) {
+      continue;
+    }
+
+    f32 rr = r - 0.5f, k = rr * rr - dy * dy;
+    f32 reach = r - (k > 0 && rr > 0 ? sqrtf(k) : 0);
+
+    if (right_side) {
+      right = fminf(right, x1 - reach);
+    }
+    else {
+      left = fmaxf(left, x0 + reach);
+    }
+  }
+
+  *from = (i32)ceilf(left - 0.5f) + 1;
+  *to = (i32)floorf(right - 0.5f);
+}
+
+// an image a texel a pixel: its texels go as they are where it covers its
+// pixels whole, the rest is asked a pixel at a time.
+// pixels x0 to x1 of a row of an image a texel a pixel, where its rounding
+// covers them in part: shade's math with the texel as it is, and nothing
+// for the pixels it does not cover.
+static void image_rim(const Raster *r, const civue_quad *q, const u8 *row,
+                      i32 ox, i32 y, i32 x0, i32 x1) {
+  const civue_pixels *im = &r->image;
+  f32 hx = q->rect[2] * 0.5f, hy = q->rect[3] * 0.5f;
+  f32 py = (f32)y + 0.5f - q->rect[1] - hy;
+  bool tile = q->params[0] > 0.5f;
+  u8 *d = pixel(r->s, x0, y);
+
+  for (i32 x = x0; x < x1; x++, d += 4) {
+    f32 px = (f32)x + 0.5f - q->rect[0] - hx;
+    f32 cover = tile ? 1 : clamp01(0.5f - sd_rounded(px, py, hx, hy, q->radii));
+
+    if (cover == 0) {
+      continue;
+    }
+
+    const u8 *t = row + (usize)MIN(MAX(x + ox, 0), (i32)im->width - 1) * 4;
+    f32 c[4] = {t[0] / 255.0f, t[1] / 255.0f, t[2] / 255.0f, t[3] / 255.0f};
+
+    scaled(c, q->color[3], c);
+
+    if (!tile) {
+      scaled(c, cover, c);
+    }
+
+    blend(d, c, r->multiply);
+  }
+}
+
+// an image scaled: image_at's math a row at a time, and nothing for the
+// pixels whose texels are all see through, which most of a frame around an
+// avatar is.
+static void image_scaled(const Raster *r, const civue_quad *q, civue_box b) {
+  const civue_pixels *im = &r->image;
+  f32 w1 = (f32)(im->width - 1), h1 = (f32)(im->height - 1);
+  f32 hx = q->rect[2] * 0.5f, hy = q->rect[3] * 0.5f;
+  bool nearest = q->params[3] > 0.5f, tile = q->params[0] > 0.5f;
+
+  for (i32 y = b.y0; y < b.y1; y++) {
+    f32 fy = (f32)y + 0.5f, v = image_v(q, im, fy), py = fy - q->rect[1] - hy;
+    f32 vv = v - 0.5f, wy = fract(vv);
+    const u8 *rows[2] = {
+      im->pixels + (usize)clampf(floorf(vv), 0, h1) * im->stride,
+      im->pixels + (usize)clampf(floorf(vv) + 1, 0, h1) * im->stride};
+    const u8 *near = im->pixels + (usize)clampf(floorf(v), 0, h1) * im->stride;
+    u8 *d = pixel(r->s, b.x0, y);
+
+    for (i32 x = b.x0; x < b.x1; x++, d += 4) {
+      f32 fx = (f32)x + 0.5f, u = image_u(q, im, fx), c[4];
+
+      if (nearest) {
+        const u8 *p = near + (usize)clampf(floorf(u), 0, w1) * 4;
+        u32 t;
+        memcpy(&t, p, sizeof t);
+
+        if (!t) {
+          continue;
+        }
+
+        for (u32 i = 0; i < 4; i++) {
+          c[i] = p[i] / 255.0f;
+        }
+      }
+      else {
+        f32 uu = u - 0.5f, wx = fract(uu);
+        usize x0 = (usize)clampf(floorf(uu), 0, w1) * 4;
+        usize x1 = (usize)clampf(floorf(uu) + 1, 0, w1) * 4;
+        u32 t[4];
+        memcpy(&t[0], rows[0] + x0, 4);
+        memcpy(&t[1], rows[0] + x1, 4);
+        memcpy(&t[2], rows[1] + x0, 4);
+        memcpy(&t[3], rows[1] + x1, 4);
+
+        if (!(t[0] | t[1] | t[2] | t[3])) {
+          continue;
+        }
+
+        for (u32 i = 0; i < 4; i++) {
+          f32 top = rows[0][x0 + i] * (1 - wx) + rows[0][x1 + i] * wx;
+          f32 bottom = rows[1][x0 + i] * (1 - wx) + rows[1][x1 + i] * wx;
+
+          c[i] = (top * (1 - wy) + bottom * wy) / 255.0f;
+        }
+      }
+
+      scaled(c, q->color[3], c);
+
+      if (!tile) {
+        f32 px = fx - q->rect[0] - hx;
+        scaled(c, clamp01(0.5f - sd_rounded(px, py, hx, hy, q->radii)), c);
+      }
+
+      blend(d, c, r->multiply);
+    }
+  }
+}
+
+static void image_quad(const Raster *r, const civue_quad *q, civue_box b) {
+  i32 ox, oy;
+
+  if (!image_one_to_one(&r->image, q, &ox, &oy)) {
+    if (r->image.pixels && r->image.width && r->image.height &&
+        q->params[2] <= 0.5f) {
+      image_scaled(r, q, b);
+    }
+    else {
+      each(r, q, b);
+    }
+
+    return;
+  }
+
+  const civue_pixels *im = &r->image;
+  f32 alpha = q->color[3];
+  bool copy = !r->multiply && alpha >= 1;
+
+  for (i32 y = b.y0; y < b.y1; y++) {
+    i32 a = b.x0, e = b.x1;
+
+    // canvas tiles cover their pixels whole.
+    if (q->params[0] <= 0.5f) {
+      whole_span(q, (f32)y + 0.5f, &a, &e);
+      a = MAX(a, b.x0);
+      e = MIN(e, b.x1);
+      e = MAX(e, a);
+    }
+
+    i32 ty = MIN(MAX(y + oy, 0), (i32)im->height - 1);
+    const u8 *row = im->pixels + (usize)ty * im->stride;
+    u8 *d = pixel(r->s, b.x0, y);
+
+    image_rim(r, q, row, ox, y, b.x0, a);
+    d += (a - b.x0) * 4;
+
+    i32 x = a;
+
+    // the texels are rgba, the pixels bgra.
+    if (copy && x + ox >= 0 && e + ox <= (i32)im->width) {
+#ifdef __ARM_NEON
+      const uint8x16_t swap = {2,  1, 0, 3,  6,  5,  4,  7,
+                               10, 9, 8, 11, 14, 13, 12, 15};
+
+      for (; x + 4 <= e; x += 4, d += 16) {
+        uint8x16_t t = vld1q_u8(row + (usize)(x + ox) * 4);
+
+        // see through somewhere: blended a pixel at a time below.
+        if (vminvq_u8(vorrq_u8(
+              t, vreinterpretq_u8_u32(vdupq_n_u32(0x00ffffff)))) != 255) {
+          break;
+        }
+
+        vst1q_u8(d, vqtbl1q_u8(t, swap));
+      }
+#endif
+    }
+
+    for (; x < e; x++, d += 4) {
+      const u8 *t = row + (usize)MIN(MAX(x + ox, 0), (i32)im->width - 1) * 4;
+
+      if (copy && t[3] == 255) {
+        d[0] = t[2], d[1] = t[1], d[2] = t[0], d[3] = 255;
+        continue;
+      }
+
+      f32 c[4] = {t[0] / 255.0f, t[1] / 255.0f, t[2] / 255.0f, t[3] / 255.0f};
+
+      scaled(c, alpha, c);
+      blend(d, c, r->multiply);
+    }
+
+    image_rim(r, q, row, ox, y, MAX(e, b.x0), b.x1);
+  }
+}
+
+// a quad drawn in `b` as if it had no rounded clip.
+static void plain_quad(const Raster *r, const civue_quad *q, civue_box b) {
+  u32 kind = (u32)q->params[1];
+
+  if (kind == CIVUE_QUAD_IMAGE) {
+    image_quad(r, q, b);
+  }
+  else if (flat_rect(q)) {
     rect_quad(r, q, b);
   }
   else if (kind == CIVUE_QUAD_MASK) {
@@ -1610,6 +2218,92 @@ static void clear_tiles(const Raster *r, const civue_draw_list *list,
   clear_boxes(&clears);
 }
 
+// the pixels of the image a batch draws, none when only the gpu has them.
+static void use_texture(Raster *r, civue_texture t) {
+  if (t == r->texture) {
+    return;
+  }
+
+  r->texture = t;
+  r->image = (civue_pixels){};
+
+  if (t && r->images && r->images->find) {
+    r->images->find(r->images->ctx, t, &r->image);
+  }
+}
+
+// an opaque rect drawn after others, and the pixels it covers whole with
+// its own color: what is under it there needs no drawing.
+typedef struct {
+  u32 at;
+  civue_box box;
+} Cover;
+
+constexpr u32 COVERS = 32;
+// less than this saves less than cutting around it takes.
+constexpr i64 COVER_AREA = 128 * 128;
+
+static civue_box covered(const civue_quad *q, civue_box limit) {
+  if (!flat_rect(q) || q->color[3] < 1) {
+    return (civue_box){};
+  }
+
+  Flat f = flat(q);
+  constexpr f32 FAR = 1e6f;
+  civue_box b =
+    cut(bounds(q, limit), (civue_box){(i32)clampf(f.whole[0], -FAR, FAR),
+                                      (i32)clampf(f.whole[1], -FAR, FAR),
+                                      (i32)clampf(f.whole[2], -FAR, FAR),
+                                      (i32)clampf(f.whole[3], -FAR, FAR)});
+  civue_box corners[4];
+
+  // a rounded clip may cut it there.
+  if (rounded(q) && corner_boxes(q, b, corners)) {
+    return (civue_box){};
+  }
+
+  return b;
+}
+
+// draws a quad in `box` but where a cover after it hides it.
+static void quad_under(Raster *r, const civue_quad *q, civue_box box,
+                       const Cover *covers, u32 n) {
+  civue_box b = bounds(q, box), parts[64];
+  u32 len = 1;
+
+  parts[0] = b;
+
+  for (u32 k = 0; k < n && len; k++) {
+    if (empty(cut(covers[k].box, b))) {
+      continue;
+    }
+
+    civue_box next[64];
+    u32 m = 0;
+
+    for (u32 i = 0; i < len && m + 4 <= countof(next); i++) {
+      m += without(parts[i], covers[k].box, next + m);
+    }
+
+    // in too many pieces: drawn whole.
+    if (m + 4 > countof(next)) {
+      parts[0] = b;
+      len = 1;
+      break;
+    }
+
+    memcpy(parts, next, m * sizeof *next);
+    len = m;
+  }
+
+  for (u32 i = 0; i < len; i++) {
+    r->box = parts[i];
+    quad(r, q);
+  }
+
+  r->box = box;
+}
+
 static void draw_box(Raster *r, const civue_draw_list *list, civue_box box) {
   if (empty(box)) {
     return;
@@ -1642,12 +2336,40 @@ static void draw_box(Raster *r, const civue_draw_list *list, civue_box box) {
     clear_tiles(r, list, whole, true);
   }
 
+  Cover covers[COVERS];
+  u32 ncovers = 0;
+
   batch = 0;
 
-  for (u32 i = first; i < n; i++) {
+  for (u32 i = first + 1; i < n && ncovers < COVERS; i++) {
+    batch = batch_of(list, i, batch);
+
+    if (!list->batches.v[batch].multiply) {
+      civue_box c = covered(&list->quads.v[i], box);
+
+      if (area(c) >= COVER_AREA) {
+        covers[ncovers++] = (Cover){i, c};
+      }
+    }
+  }
+
+  batch = 0;
+
+  for (u32 i = first, next = 0; i < n; i++) {
     batch = batch_of(list, i, batch);
     r->multiply = list->batches.v[batch].multiply;
-    quad(r, &list->quads.v[i]);
+    use_texture(r, list->batches.v[batch].texture);
+
+    while (next < ncovers && covers[next].at <= i) {
+      next++;
+    }
+
+    if (next < ncovers) {
+      quad_under(r, &list->quads.v[i], box, covers + next, ncovers - next);
+    }
+    else {
+      quad(r, &list->quads.v[i]);
+    }
   }
 }
 
@@ -1692,6 +2414,7 @@ static void draw_tiles(Raster *r, const civue_draw_list *list,
 
     batch = batch_of(list, i, batch);
     r->multiply = list->batches.v[batch].multiply;
+    use_texture(r, list->batches.v[batch].texture);
 
     if (whole) {
       r->box = window;
@@ -1717,8 +2440,10 @@ static void draw_tiles(Raster *r, const civue_draw_list *list,
 
 void civue_raster(const civue_surface *s, const civue_draw_list *list,
                   civue_color clear, const civue_damage *damage,
-                  const civue_atlas *mask, const civue_atlas *color) {
-  Raster r = {.s = s, .mask = mask->pixels, .color = color->pixels};
+                  const civue_atlas *mask, const civue_atlas *color,
+                  const civue_raster_images *images) {
+  Raster r = {
+    .s = s, .mask = mask->pixels, .color = color->pixels, .images = images};
   // over nothing, see through or not.
   u8 p[4] = {byte(clear.b * clear.a * 255), byte(clear.g * clear.a * 255),
              byte(clear.r * clear.a * 255), byte(clear.a * 255)};
@@ -1737,37 +2462,40 @@ void civue_raster(const civue_surface *s, const civue_draw_list *list,
 constexpr u64 ASKED = 32;
 constexpr u64 BLENDED = 4;
 
-// what a quad takes to draw in `box` past filling its pixels, false when
-// only the gpu draws it.
-static bool quad_cost(const civue_quad *q, civue_box box, u64 *cost) {
+// what a quad takes to draw in `b` as if it had no rounded clip, past filling
+// its pixels.
+static void plain_cost(const civue_quad *q, civue_box b,
+                       const civue_pixels *image, u64 *cost) {
   u32 kind = (u32)q->params[1];
+  i32 ox, oy;
 
-  if (kind == CIVUE_QUAD_MASK && !turned(q) && !rounded(q)) {
-    return true;
+  if (kind == CIVUE_QUAD_IMAGE && image_one_to_one(image, q, &ox, &oy)) {
+    // its rim is asked, its corners' curves and two pixels a row and a
+    // column.
+    f32 corners = 0;
+
+    for (u32 i = 0; i < 4; i++) {
+      f32 r = fminf(q->radii[i], fminf(q->rect[2], q->rect[3]) * 0.5f);
+      corners += r * r;
+    }
+
+    f32 asked = corners + 2 * (f32)(b.y1 - b.y0) + 2 * (f32)(b.x1 - b.x0);
+
+    *cost += (u64)fminf(asked, (f32)area(b)) * ASKED + (u64)area(b) * BLENDED;
+    return;
+  }
+
+  if (kind == CIVUE_QUAD_MASK) {
+    return;
   }
 
   // a rect is filled but for its edges.
-  if (is_flat(q) && q->params[0] == 0 && q->radii[0] == 0 && q->radii[1] == 0 &&
-      q->radii[2] == 0 && q->radii[3] == 0) {
-    return true;
+  if (flat_rect(q) && q->params[0] == 0 && q->radii[0] == 0 &&
+      q->radii[1] == 0 && q->radii[2] == 0 && q->radii[3] == 0) {
+    return;
   }
 
-  civue_box b = bounds(q, box);
-
-  if (empty(b)) {
-    return true;
-  }
-
-  if (kind == CIVUE_QUAD_IMAGE) {
-    return false;
-  }
-
-  if (turned(q) || rounded(q)) {
-    *cost += (u64)area(b) * ASKED;
-    return true;
-  }
-
-  if (is_flat(q)) {
+  if (flat_rect(q)) {
     // its corners and edges are asked, at most two pixels a row and what
     // its corners reach.
     Flat f = flat(q);
@@ -1776,7 +2504,7 @@ static bool quad_cost(const civue_quad *q, civue_box box, u64 *cost) {
     f32 asked = across * rows + 2 * (f32)(b.y1 - b.y0);
 
     *cost += (u64)fminf(asked, (f32)area(b)) * ASKED;
-    return true;
+    return;
   }
 
   if (kind == CIVUE_QUAD_SHADOW) {
@@ -1790,25 +2518,61 @@ static bool quad_cost(const civue_quad *q, civue_box box, u64 *cost) {
       area(cut(rows, cover(s.x[0], -INFINITY, s.x[1], INFINITY, b)));
 
     *cost += (u64)(ends - straight) * ASKED + (u64)straight * BLENDED;
-    return true;
+    return;
   }
 
   if (kind == CIVUE_QUAD_COLOR_GLYPH) {
     *cost += (u64)area(b) * BLENDED;
-    return true;
+    return;
   }
 
   *cost += (u64)area(b) * ASKED;
+}
+
+// what a quad takes to draw in `box` past filling its pixels, false when
+// only the gpu draws it: an image the cpu has no pixels of.
+static bool quad_cost(const civue_quad *q, civue_box box,
+                      const civue_pixels *image, u64 *cost) {
+  if ((u32)q->params[1] == CIVUE_QUAD_IMAGE && !image->pixels) {
+    return false;
+  }
+
+  civue_box b = bounds(q, box);
+
+  if (empty(b)) {
+    return true;
+  }
+
+  if (turned(q)) {
+    *cost += (u64)area(b) * ASKED;
+    return true;
+  }
+
+  if (rounded(q)) {
+    civue_box corners[4];
+    u32 n = corner_boxes(q, b, corners);
+
+    for (u32 i = 0; i < n; i++) {
+      *cost += (u64)area(corners[i]) * ASKED;
+    }
+  }
+
+  plain_cost(q, b, image, cost);
   return true;
 }
 
 bool civue_raster_cost(const civue_draw_list *list, const civue_damage *damage,
-                       u32 width, u32 height, uint64_t *cost) {
+                       u32 width, u32 height, const civue_raster_images *images,
+                       uint64_t *cost) {
   civue_box window = whole_window(width, height);
   u64 sum = civue_damage_area(damage, width, height);
+  u32 batch = 0;
+  civue_texture texture = 0;
+  civue_pixels image = {};
 
   if (damage->all || damage->any) {
-    vec_each(&list->quads, q) {
+    for (u32 i = 0; i < list->quads.len; i++) {
+      const civue_quad *q = &list->quads.v[i];
       civue_box b = bounds(q, window);
 
       if (empty(b)) {
@@ -1830,7 +2594,21 @@ bool civue_raster_cost(const civue_draw_list *list, const civue_damage *damage,
         }
       }
 
-      if (!quad_cost(q, window, &sum)) {
+      if ((u32)q->params[1] == CIVUE_QUAD_IMAGE) {
+        batch = batch_of(list, i, batch);
+        civue_texture t = list->batches.v[batch].texture;
+
+        if (t != texture || !texture) {
+          texture = t;
+          image = (civue_pixels){};
+
+          if (t && images && images->find) {
+            images->find(images->ctx, t, &image);
+          }
+        }
+      }
+
+      if (!quad_cost(q, window, &image, &sum)) {
         return false;
       }
     }

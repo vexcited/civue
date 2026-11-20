@@ -372,6 +372,10 @@ civue_texture civue_gfx_upload_image(civue_gfx *g, u32 w, u32 h,
   return tid;
 }
 
+bool civue_gfx_pixels(civue_gfx *, civue_texture, civue_pixels *) {
+  return false;
+}
+
 // a free buffer of at least `len` bytes, marked busy, or nullptr when the
 // gpu still holds them all.
 static QuadBuffer *quad_buffer(civue_gfx *g, usize len) {

@@ -382,6 +382,15 @@ static f64 time_allowed() {
   return TOO_LONG / (hz > 0 ? hz : 60);
 }
 
+static bool find_pixels(void *ctx, civue_texture t, civue_pixels *out) {
+  return civue_gfx_pixels(ctx, t, out);
+}
+
+// the images the cpu draws: the ones civue uploaded.
+static civue_raster_images images_of() {
+  return (civue_raster_images){find_pixels, W.gfx};
+}
+
 // who draws what changed of `list`. the gpu's driver keeps over a hundred
 // megabytes around while it is given work, and for seconds after, so the
 // cpu draws every frame it can and has the time to.
@@ -400,8 +409,9 @@ static Drawer drawer(const civue_draw_list *list, const civue_damage *changes,
   }
 
   u64 cost;
+  civue_raster_images images = images_of();
 
-  if (!civue_raster_cost(list, changes, pw, ph, &cost)) {
+  if (!civue_raster_cost(list, changes, pw, ph, &images, &cost)) {
     return BY_GPU;
   }
 
@@ -413,7 +423,7 @@ static Drawer drawer(const civue_draw_list *list, const civue_damage *changes,
     civue_damage all = {.all = true};
     u64 anew;
 
-    if (civue_raster_cost(list, &all, pw, ph, &anew)) {
+    if (civue_raster_cost(list, &all, pw, ph, &images, &anew)) {
       by = ANEW;
       cost = anew;
     }
@@ -596,8 +606,9 @@ static void draw_on_cpu(Drawer by, const civue_draw_list *list,
 
   civue_surface pixels = {IOSurfaceGetBaseAddress(io), pw, ph,
                           IOSurfaceGetBytesPerRow(io)};
+  civue_raster_images images = images_of();
   civue_raster(&pixels, list, background, &drawn, civue_gfx_atlas(W.gfx),
-               civue_gfx_color_atlas(W.gfx));
+               civue_gfx_color_atlas(W.gfx), &images);
   IOSurfaceUnlock(io, 0, nullptr);
 
   for (int i = 0; i < (int)countof(W.surfaces); i++) {
