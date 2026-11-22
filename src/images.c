@@ -92,6 +92,7 @@ struct Job {
   Blob *read;
   u8 *rgba;
   u32 width, height;
+  u32 color;
 };
 
 static void job_free(Job *job) {
@@ -265,7 +266,60 @@ static bool is_svg(const u8 *bytes, usize len) {
   return false;
 }
 
+// the color most of an image is: the fullest of 4096 boxes of colors, as the
+// mean of what fell in it. like the palettes browsers' apps take from
+// avatars, every tenth pixel is looked at, and clear and near white ones
+// are left out.
+static u32 dominant(const u8 *rgba, u32 width, u32 height) {
+  struct {
+    u32 counts[4096];
+    u64 sums[4096][3];
+  } *h = xcalloc(1, sizeof *h);
+  u32 *counts = h->counts;
+  u64 (*sums)[3] = h->sums;
+  usize pixels = (usize)width * height;
+  u32 best = 0;
+
+  for (usize i = 0; i < pixels; i += 10) {
+    const u8 *p = rgba + i * 4;
+
+    if (p[3] < 125 || (p[0] > 250 && p[1] > 250 && p[2] > 250)) {
+      continue;
+    }
+
+    u32 box = (u32)(p[0] >> 4) << 8 | (u32)(p[1] >> 4) << 4 | (p[2] >> 4);
+
+    counts[box]++;
+    sums[box][0] += p[0];
+    sums[box][1] += p[1];
+    sums[box][2] += p[2];
+
+    if (counts[box] > counts[best]) {
+      best = box;
+    }
+  }
+
+  u32 n = counts[best];
+  u32 color = n == 0 ? 0
+                     : (u32)(sums[best][0] / n) << 24 |
+                         (u32)(sums[best][1] / n) << 16 |
+                         (u32)(sums[best][2] / n) << 8 | 0xff;
+
+  free(h);
+  return color;
+}
+
+static void decode_one(Job *job);
+
 static void decode(Job *job) {
+  decode_one(job);
+
+  if (job->rgba) {
+    job->color = dominant(job->rgba, job->width, job->height);
+  }
+}
+
+static void decode_one(Job *job) {
   const Blob *b = job->blob;
 
   if (!is_svg(b->data, b->len)) {
@@ -367,6 +421,7 @@ struct Entry {
   bool with_source;
   civue_texture texture;
   u32 width, height;
+  u32 color;
   usize bytes;
   f64 used_at;
   u64 asked;
@@ -850,6 +905,7 @@ static void on_decoded(civue_images *im, Job *job) {
 
   if (texture != 0) {
     e->texture = texture;
+    e->color = job->color;
     e->width = job->width;
     e->height = job->height;
     e->bytes = (usize)job->width * job->height * 4;
@@ -1164,7 +1220,8 @@ civue_image_info civue_images_get(civue_images *im, civue_ui *ui,
     pump(im);
   }
 
-  return (civue_image_info){e->state, e->texture, e->width, e->height};
+  return (civue_image_info){e->state, e->texture, e->width, e->height,
+                            e->state == CIVUE_IMAGE_READY ? e->color : 0};
 }
 
 void civue_images_fetched(civue_images *im, uint64_t load, const void *bytes,

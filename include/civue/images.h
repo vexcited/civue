@@ -41,6 +41,10 @@ typedef struct {
   civue_texture texture;
   // pixels of the texture, which may be smaller than the image at the url.
   uint32_t width, height;
+  // the color most of it is, 0xrrggbbaa as civue_hexa takes it, for what is
+  // drawn around it. 0 when it has none: still loading, or clear or white all
+  // over.
+  uint32_t color;
 } civue_image_info;
 
 typedef enum : uint8_t {
