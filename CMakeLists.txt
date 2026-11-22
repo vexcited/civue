@@ -352,12 +352,13 @@ set(CIVUE_DARWIN_SOURCES
   src/darwin/gfx.m src/darwin/gpu.m src/darwin/image.m
   src/darwin/pasteboard.m
   src/darwin/spell.m src/darwin/svg.m src/darwin/text.c
-  src/darwin/webview.m src/darwin/window.m)
+  src/darwin/video.m src/darwin/webview.m src/darwin/window.m)
 
 set(CIVUE_LINUX_SOURCES
   src/linux/clipboard.c src/linux/cursors.c src/linux/filepanel.c
   src/linux/gfx.c src/linux/image.c src/linux/pasteboard.c src/linux/spell.c
-  src/linux/svg.c src/linux/text.c src/linux/vk.c src/linux/webview.c
+  src/linux/svg.c src/linux/text.c src/linux/video.c src/linux/vk.c
+  src/linux/webview.c
   src/linux/window.c)
 
 if(APPLE)
@@ -374,7 +375,8 @@ if(APPLE)
     "-framework QuartzCore" "-framework CoreText" "-framework IOSurface"
     "-framework CoreGraphics" "-framework ImageIO"
     "-framework CoreFoundation" "-framework UniformTypeIdentifiers"
-    "-framework WebKit" "-framework Carbon" objc)
+    "-framework WebKit" "-framework Carbon" "-framework AVFoundation"
+    "-framework CoreMedia" "-framework CoreVideo" objc)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_library(civue STATIC ${CIVUE_SOURCES} ${CIVUE_LINUX_SOURCES})
   target_compile_definitions(civue PRIVATE _GNU_SOURCE)
