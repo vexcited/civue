@@ -8,6 +8,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <sys/stat.h>
@@ -20,6 +21,8 @@ constexpr usize FILE_BYTES_MAX = 64u << 20;
 constexpr u32 PIXELS_MAX = 4096;
 // the side an svg is drawn at when none is asked for.
 constexpr u32 SVG_SIDE = 128;
+// the frames of one animated image take this share of the memory at most.
+constexpr usize FRAMES_SHARE = 4;
 // an image asked for this recently may still be in a frame being shown.
 constexpr f64 KEEP_SECONDS = 2;
 constexpr f64 RETRY_SECONDS = 60;
@@ -87,11 +90,15 @@ struct Job {
   Blob *blob;
   u32 max_pixels;
   u64 limit;
+  // every frame is wanted, at most `limit` bytes of them.
+  bool animated;
 
-  // what a read or a decode found, null when nothing.
+  // what a read or a decode found, null when nothing. more than one frame
+  // follow each other in `rgba`.
   Blob *read;
   u8 *rgba;
-  u32 width, height;
+  u32 width, height, frames;
+  f32 *delays;
   u32 color;
 };
 
@@ -99,6 +106,7 @@ static void job_free(Job *job) {
   blob_drop(job->blob);
   blob_drop(job->read);
   free(job->rgba);
+  free(job->delays);
   free(job->path);
   free(job);
 }
@@ -323,8 +331,22 @@ static void decode_one(Job *job) {
   const Blob *b = job->blob;
 
   if (!is_svg(b->data, b->len)) {
+    civue__frames frames = {};
+
+    if (job->animated &&
+        civue__image_decode_frames(b->data, b->len, job->max_pixels, job->limit,
+                                   &frames)) {
+      job->rgba = frames.rgba;
+      job->delays = frames.delays;
+      job->width = frames.width;
+      job->height = frames.height;
+      job->frames = frames.count;
+      return;
+    }
+
     job->rgba = civue__image_decode(b->data, b->len, job->max_pixels,
                                     &job->width, &job->height);
+    job->frames = 1;
     return;
   }
 
@@ -335,6 +357,7 @@ static void decode_one(Job *job) {
   if (civue_svg_rasterize((const char *)b->data, b->len, side, side, &rgba)) {
     job->rgba = rgba.v;
     job->width = job->height = side;
+    job->frames = 1;
   }
   else {
     free(rgba.v);
@@ -422,6 +445,13 @@ struct Entry {
   civue_texture texture;
   u32 width, height;
   u32 color;
+  // an animated image's frames, `texture` being the first, and when it
+  // was first shown. one frame for a still image.
+  bool animated;
+  u32 frames;
+  civue_texture *textures;
+  f32 *delays;
+  f64 duration, started;
   usize bytes;
   f64 used_at;
   u64 asked;
@@ -670,6 +700,13 @@ static void drop_entry(civue_images *im, Entry *e) {
     civue_gfx_free_texture(im->gfx, e->texture);
   }
 
+  for (u32 i = 1; i < e->frames && im->gfx; i++) {
+    civue_gfx_free_texture(im->gfx, e->textures[i]);
+  }
+
+  free(e->textures);
+  free(e->delays);
+
   im->bytes -= e->bytes;
   unlink_entry(im, e);
   map_del(&im->entries, e->key);
@@ -843,7 +880,9 @@ static void pump(civue_images *im) {
                      .key = best->key,
                      .serial = best->serial,
                      .blob = blob_keep(best->source->bytes),
-                     .max_pixels = best->max_pixels});
+                     .max_pixels = best->max_pixels,
+                     .animated = best->animated,
+                     .limit = im->o.memory_bytes / FRAMES_SHARE});
   }
 
   im->pumping = false;
@@ -897,10 +936,27 @@ static void on_decoded(civue_images *im, Job *job) {
   }
 
   civue_texture texture = 0;
+  usize frame = (usize)job->width * job->height * 4;
 
   if (job->rgba && im->gfx) {
     texture =
       civue_gfx_upload_image(im->gfx, job->width, job->height, job->rgba);
+  }
+
+  if (texture != 0 && job->frames > 1) {
+    e->textures = xcalloc(job->frames, sizeof(civue_texture));
+    e->textures[0] = texture;
+
+    for (u32 i = 1; i < job->frames; i++) {
+      e->textures[i] = civue_gfx_upload_image(im->gfx, job->width, job->height,
+                                              job->rgba + i * frame);
+      e->duration += job->delays[i];
+    }
+
+    e->duration += job->delays[0];
+    e->delays = job->delays;
+    job->delays = nullptr;
+    e->frames = job->frames;
   }
 
   if (texture != 0) {
@@ -908,7 +964,8 @@ static void on_decoded(civue_images *im, Job *job) {
     e->color = job->color;
     e->width = job->width;
     e->height = job->height;
-    e->bytes = (usize)job->width * job->height * 4;
+    e->frames = MAX(e->frames, 1);
+    e->bytes = frame * e->frames;
     im->bytes += e->bytes;
     im->stats.decoded++;
     finish(im, e, CIVUE_IMAGE_READY);
@@ -1148,7 +1205,7 @@ static Source *source_of(civue_images *im, const char *url) {
 }
 
 static Entry *entry_new(civue_images *im, u64 key, const char *url,
-                        u32 max_pixels) {
+                        u32 max_pixels, bool animated) {
   Entry *e = own_new(sizeof(Entry));
   Source *s = source_of(im, url);
 
@@ -1156,6 +1213,7 @@ static Entry *entry_new(civue_images *im, u64 key, const char *url,
   e->serial = ++im->serial;
   e->source = s;
   e->max_pixels = max_pixels;
+  e->animated = animated;
   e->sibling = s->entries;
   s->entries = e;
   map_put(&im->entries, key, (u64)(uintptr_t)e);
@@ -1179,8 +1237,32 @@ static Entry *entry_new(civue_images *im, u64 key, const char *url,
   return e;
 }
 
-civue_image_info civue_images_get(civue_images *im, civue_ui *ui,
-                                  const char *url, uint32_t max_pixels) {
+// the frame of `e` due at `now`, asking for a frame when the next is due.
+static civue_texture frame_at(Entry *e, civue_ui *ui, f64 now) {
+  if (e->frames < 2 || e->duration <= 0) {
+    return e->texture;
+  }
+
+  if (e->started == 0) {
+    e->started = now;
+  }
+
+  f64 t = fmod(now - e->started, e->duration);
+  u32 i = 0;
+
+  while (i + 1 < e->frames && t >= e->delays[i]) {
+    t -= e->delays[i++];
+  }
+
+  if (ui) {
+    civue_request_repaint_after(ui, MAX(e->delays[i] - t, 0.001));
+  }
+
+  return e->textures[i];
+}
+
+static civue_image_info get(civue_images *im, civue_ui *ui, const char *url,
+                            uint32_t max_pixels, bool animated) {
   if (!im || !url || !url[0]) {
     return (civue_image_info){.state = CIVUE_IMAGE_FAILED};
   }
@@ -1195,10 +1277,11 @@ civue_image_info civue_images_get(civue_images *im, civue_ui *ui,
     max_pixels = PIXELS_MAX;
   }
 
-  u64 key = cilo_hash_str(url) ^ cilo_hash_u64(max_pixels), at = 0;
+  u64 key = cilo_hash_str(url) ^ cilo_hash_u64(max_pixels + animated * 0x10000),
+      at = 0;
   bool fresh = !map_get(&im->entries, key, &at);
-  Entry *e =
-    fresh ? entry_new(im, key, url, max_pixels) : (Entry *)(uintptr_t)at;
+  Entry *e = fresh ? entry_new(im, key, url, max_pixels, animated)
+                   : (Entry *)(uintptr_t)at;
   Source *s = e->source;
   f64 now = now_s();
 
@@ -1220,8 +1303,22 @@ civue_image_info civue_images_get(civue_images *im, civue_ui *ui,
     pump(im);
   }
 
-  return (civue_image_info){e->state, e->texture, e->width, e->height,
-                            e->state == CIVUE_IMAGE_READY ? e->color : 0};
+  civue_texture texture =
+    e->state == CIVUE_IMAGE_READY ? frame_at(e, ui, ui ? ui->now : now) : 0;
+
+  return (civue_image_info){e->state, texture, e->width, e->height,
+                            MAX(e->frames, 1), texture ? e->color : 0};
+}
+
+civue_image_info civue_images_get(civue_images *im, civue_ui *ui,
+                                  const char *url, uint32_t max_pixels) {
+  return get(im, ui, url, max_pixels, false);
+}
+
+civue_image_info civue_images_get_animated(civue_images *im, civue_ui *ui,
+                                           const char *url,
+                                           uint32_t max_pixels) {
+  return get(im, ui, url, max_pixels, true);
 }
 
 void civue_images_fetched(civue_images *im, uint64_t load, const void *bytes,

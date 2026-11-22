@@ -123,6 +123,21 @@ static inline void buf_putc(civue_bytes *b, char c) {
 u8 *civue__image_decode(const u8 *bytes, usize n, u32 max_pixels, u32 *width,
                         u32 *height);
 
+typedef struct {
+  // every frame one after the other, each `width` by `height`, like
+  // civue__image_decode's pixels.
+  u8 *rgba;
+  // the seconds each frame shows for.
+  f32 *delays;
+  u32 width, height, count;
+} civue__frames;
+
+// every frame of an animated gif, webp or png, decoded smaller than
+// `max_pixels` when all of them would take more than `max_bytes`. false for
+// a still image, and where the system cannot tell the frames apart.
+bool civue__image_decode_frames(const u8 *bytes, usize n, u32 max_pixels,
+                                usize max_bytes, civue__frames *out);
+
 /* ========================================================================== */
 /* maps, hashing and text.                                                    */
 /* ========================================================================== */

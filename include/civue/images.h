@@ -41,9 +41,12 @@ typedef struct {
   civue_texture texture;
   // pixels of the texture, which may be smaller than the image at the url.
   uint32_t width, height;
-  // the color most of it is, 0xrrggbbaa as civue_hexa takes it, for what is
-  // drawn around it. 0 when it has none: still loading, or clear or white all
-  // over.
+  // how many frames an animated image has, 1 for a still one and for one
+  // asked for with civue_images_get.
+  uint32_t frames;
+  // the color most of its first frame is, 0xrrggbbaa as civue_hexa takes
+  // it, for what is drawn around it. 0 when it has none: still loading, or
+  // clear or white all over.
   uint32_t color;
 } civue_image_info;
 
@@ -95,6 +98,15 @@ void civue_images_free(civue_images *im);
 // empty url is CIVUE_IMAGE_FAILED.
 civue_image_info civue_images_get(civue_images *im, civue_ui *ui,
                                   const char *url, uint32_t max_pixels);
+
+// the same with every frame of an animated gif, webp or png: `texture` is
+// the frame due at the ui's `now`, counted from when it was first shown,
+// and a frame is asked for when the next one is due. the frames together
+// take a quarter of the memory at most, smaller than `max_pixels` when they
+// have to. a still image is the one civue_images_get gives, decoded apart.
+civue_image_info civue_images_get_animated(civue_images *im, civue_ui *ui,
+                                           const char *url,
+                                           uint32_t max_pixels);
 
 // what the app's `fetch` got for `load`. `bytes` are copied.
 void civue_images_fetched(civue_images *im, uint64_t load, const void *bytes,

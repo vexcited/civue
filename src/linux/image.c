@@ -124,3 +124,9 @@ u8 *civue__image_decode(const u8 *bytes, usize n, u32 max_pixels, u32 *width,
 
   return rgba;
 }
+
+// gdk-pixbuf's animations are not read yet: the first frame shows still.
+bool civue__image_decode_frames(const u8 *, usize, u32, usize,
+                                civue__frames *) {
+  return false;
+}
