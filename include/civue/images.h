@@ -23,7 +23,8 @@ extern "C" {
 /*                                                                            */
 /* an url is fetched once however many sizes of it are asked for, what was    */
 /* asked for last is loaded first, and what waits behind too many others is   */
-/* forgotten until it is asked for again.                                     */
+/* forgotten until it is asked for again. a file:// url followed by a raw    */
+/* absolute path is read from that file, never fetched nor cached.            */
 /* ========================================================================== */
 
 typedef enum : uint8_t {

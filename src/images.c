@@ -339,6 +339,8 @@ struct Source {
   char *url;
   // its file in the disk cache, null without one.
   char *path;
+  // a file:// url, read from `path` and never fetched, written or removed.
+  bool local;
   SourceState state;
   // the bytes came from disk, where a file may be damaged.
   bool from_disk;
@@ -810,9 +812,12 @@ static void on_read(civue_images *im, Job *job) {
   if (job->read) {
     s->bytes = job->read;
     job->read = nullptr;
-    s->from_disk = true;
+    s->from_disk = !s->local;
     s->state = SOURCE_LOADED;
     im->stats.from_disk++;
+  }
+  else if (s->local) {
+    fail_source(im, s, false);
   }
   else {
     s->state = SOURCE_WANTED;
@@ -868,7 +873,7 @@ static void on_decoded(civue_images *im, Job *job) {
     return;
   }
 
-  if (s->path && !job->rgba) {
+  if (s->path && !s->local && !job->rgba) {
     submit(im, (Job){.kind = JOB_REMOVE, .path = xstrdup(s->path)});
   }
 
@@ -1080,7 +1085,8 @@ static Source *source_of(civue_images *im, const char *url) {
 
   s->key = key;
   s->url = xstrdup(url);
-  s->path = path_of(im, url);
+  s->local = !strncmp(url, "file://", 7);
+  s->path = s->local ? xstrdup(url + 7) : path_of(im, url);
   map_put(&im->sources, key, (u64)(uintptr_t)s);
   return s;
 }
