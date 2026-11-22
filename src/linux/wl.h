@@ -41,6 +41,7 @@ bool civue__main_thread();
 
 // files dragged over the window, and dropped on it. window.c.
 void civue__drag_moved(civue_vec2 at);
+void civue__drag_left();
 void civue__dropped(civue_vec2 at, civue_strs *paths);
 
 // the data device's selection and drags, once the seat is known. clipboard.c.

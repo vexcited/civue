@@ -868,10 +868,18 @@ static void released_all() {
 
 void civue__drag_moved(civue_vec2 at) {
   W.input.drop_at = at;
+  W.input.drag_over = true;
+  want();
+}
+
+void civue__drag_left() {
+  W.input.drag_over = false;
+  want();
 }
 
 void civue__dropped(civue_vec2 at, civue_strs *paths) {
   W.input.drop_at = at;
+  W.input.drag_over = false;
   vec_each(paths, p) {
     vec_push(&W.input.drops, *p);
   }

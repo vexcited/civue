@@ -1548,12 +1548,31 @@ static void sync_resizes(bool on) {
 // ---- dropped files ----
 
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)info {
+  return [self draggingUpdated:info];
+}
+
+- (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)info {
+  NSPoint at = [self convertPoint:info.draggingLocation fromView:nil];
+  W.input.drop_at = v2(at.x, at.y);
+  W.input.drag_over = true;
+  want();
   return NSDragOperationCopy;
+}
+
+- (void)draggingExited:(id<NSDraggingInfo>)info {
+  W.input.drag_over = false;
+  want();
+}
+
+- (void)draggingEnded:(id<NSDraggingInfo>)info {
+  W.input.drag_over = false;
+  want();
 }
 
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)info {
   NSPoint at = [self convertPoint:info.draggingLocation fromView:nil];
   W.input.drop_at = v2(at.x, at.y);
+  W.input.drag_over = false;
 
   NSArray<NSURL *> *urls = [info.draggingPasteboard
     readObjectsForClasses:@[ NSURL.class ]

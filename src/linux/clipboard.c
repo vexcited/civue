@@ -130,23 +130,29 @@ static void device_enter(void *data, struct wl_data_device *d, u32 serial,
       files ? WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY : 0);
   }
   D.drag_at = v2((f32)wl_fixed_to_double(x), (f32)wl_fixed_to_double(y));
-  civue__drag_moved(D.drag_at);
+  if (files) {
+    civue__drag_moved(D.drag_at);
+  }
 }
 
 static void device_leave(void *data, struct wl_data_device *d) {
   offer_free(D.drag);
   D.drag = nullptr;
+  civue__drag_left();
 }
 
 static void device_motion(void *data, struct wl_data_device *d, u32 time,
                           wl_fixed_t x, wl_fixed_t y) {
   D.drag_at = v2((f32)wl_fixed_to_double(x), (f32)wl_fixed_to_double(y));
-  civue__drag_moved(D.drag_at);
+  if (D.drag && offers(D.drag, "text/uri-list")) {
+    civue__drag_moved(D.drag_at);
+  }
 }
 
 static void device_drop(void *data, struct wl_data_device *d) {
   Offer *o = D.drag;
   D.drag = nullptr;
+  civue__drag_left();
   if (!o) {
     return;
   }

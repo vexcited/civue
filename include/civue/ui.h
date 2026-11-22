@@ -140,8 +140,11 @@ typedef struct {
   // paths of files dropped on the window, owned. whoever takes one frees it
   // and removes it, the rest are freed at the next frame.
   civue_strs drops;
-  // where the files in `drops` landed.
+  // where the files in `drops` landed, or where the ones dragged over the
+  // window are while `drag_over`.
   civue_vec2 drop_at;
+  // files are dragged over the window and not dropped yet.
+  bool drag_over;
   // every place the pointer moved to, in order.
   CIVUE_VEC(civue_trail_point) trail;
   float pressure;
