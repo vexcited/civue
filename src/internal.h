@@ -36,17 +36,23 @@ typedef size_t usize;
 /* civue keeps to itself from cilo.                                           */
 /* ========================================================================== */
 
-[[noreturn, gnu::format(printf, 1, 2)]] void civue__die(const char *fmt, ...);
-[[gnu::format(printf, 1, 2)]] void civue__log(const char *fmt, ...);
+[[noreturn, gnu::cold, gnu::format(printf, 1, 2)]]
+void civue__die(const char *fmt, ...);
+[[gnu::cold, gnu::format(printf, 1, 2)]] void civue__log(const char *fmt, ...);
 #define die civue__die
 #define LOG civue__log
 #define now_s civue_now
 
+[[nodiscard, gnu::malloc, gnu::alloc_size(1), gnu::returns_nonnull]]
 void *civue__xmalloc(usize n);
+[[nodiscard, gnu::malloc, gnu::alloc_size(1, 2), gnu::returns_nonnull]]
 void *civue__xcalloc(usize n, usize size);
+[[nodiscard, gnu::alloc_size(2), gnu::returns_nonnull]]
 void *civue__xrealloc(void *p, usize n);
+[[nodiscard, gnu::malloc, gnu::returns_nonnull]]
 char *civue__xstrndup(const char *s, usize n);
-[[gnu::format(printf, 1, 2)]] char *civue__xfmt(const char *fmt, ...);
+[[nodiscard, gnu::malloc, gnu::returns_nonnull, gnu::format(printf, 1, 2)]]
+char *civue__xfmt(const char *fmt, ...);
 #define xmalloc civue__xmalloc
 #define xcalloc civue__xcalloc
 #define xrealloc civue__xrealloc
@@ -73,7 +79,7 @@ static inline void own_free(void *p) {
 #define Vec(T) CIVUE_VEC(T)
 void civue__vec_grow(void **v, u32 *cap, u32 need, usize item);
 #define vec_reserve(a, n)                                           \
-  ((a)->len + (n) > (a)->cap                                        \
+  (unlikely((a)->len + (n) > (a)->cap)                              \
      ? civue__vec_grow((void **)&(a)->v, &(a)->cap, (a)->len + (n), \
                        sizeof(*(a)->v))                             \
      : (void)0)
@@ -104,7 +110,7 @@ void civue__vec_grow(void **v, u32 *cap, u32 need, usize item);
 void civue__buf_put(civue_bytes *b, const void *p, usize n);
 [[gnu::format(printf, 2, 3)]] void civue__buf_printf(civue_bytes *b,
                                                      const char *fmt, ...);
-char *civue__buf_take(civue_bytes *b);
+[[nodiscard, gnu::returns_nonnull]] char *civue__buf_take(civue_bytes *b);
 #define buf_put civue__buf_put
 #define buf_printf civue__buf_printf
 #define buf_take civue__buf_take

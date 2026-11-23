@@ -108,9 +108,10 @@ float civue_rich_draw(civue_ui *ui, const civue_rich_doc *d, civue_vec2 origin,
 civue_rich_doc civue_rich_new();
 civue_rich_doc civue_rich_clone(const civue_rich_doc *d);
 // no text and no list.
-bool civue_rich_is_empty(const civue_rich_doc *d);
+[[gnu::pure]] bool civue_rich_is_empty(const civue_rich_doc *d);
 // the same text, formats and blocks.
-bool civue_rich_equal(const civue_rich_doc *a, const civue_rich_doc *b);
+[[gnu::pure]] bool civue_rich_equal(const civue_rich_doc *a,
+                                    const civue_rich_doc *b);
 // `n` bytes of `s` put in at `at` in format `f`, a newline starting a
 // paragraph.
 void civue_rich_insert(civue_rich_doc *d, uint32_t at, const char *s, size_t n,

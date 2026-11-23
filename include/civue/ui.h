@@ -329,7 +329,7 @@ void civue_input_free(civue_input *in);
 
 // what took the pointer at `p` in the last frame, topmost first, from
 // between frames: a window asks whether a press there moves it.
-civue_id civue_region_at(const civue_ui *ui, civue_vec2 p);
+[[gnu::pure]] civue_id civue_region_at(const civue_ui *ui, civue_vec2 p);
 void civue_request_repaint(civue_ui *ui);
 void civue_request_repaint_after(civue_ui *ui, double seconds);
 
@@ -344,7 +344,7 @@ civue_draw_list *civue_list(civue_ui *ui);
 // restricts drawing to `r` until civue_pop_clip.
 void civue_push_clip(civue_ui *ui, civue_rect r);
 void civue_pop_clip(civue_ui *ui);
-civue_rect civue_clip_rect(civue_ui *ui);
+[[gnu::pure]] civue_rect civue_clip_rect(civue_ui *ui);
 // rounds the corners of what is drawn to those of `r` until
 // civue_pop_round, radii from the top left clockwise. it does not clip to
 // `r`'s sides, civue_push_clip does.
@@ -359,10 +359,10 @@ void civue_pop_round(civue_ui *ui);
 civue_response civue_interact(civue_ui *ui, civue_id id, civue_rect rect,
                               civue_sense sense);
 // whether `id` was topmost under the pointer last frame, or holds it.
-bool civue_owns_pointer(civue_ui *ui, civue_id id);
-bool civue_drawn_last_frame(civue_ui *ui, civue_id id);
-bool civue_under_overlay(civue_ui *ui, civue_vec2 p);
-bool civue_pointer_moved(civue_ui *ui);
+[[gnu::pure]] bool civue_owns_pointer(civue_ui *ui, civue_id id);
+[[gnu::pure]] bool civue_drawn_last_frame(civue_ui *ui, civue_id id);
+[[gnu::pure]] bool civue_under_overlay(civue_ui *ui, civue_vec2 p);
+[[gnu::pure]] bool civue_pointer_moved(civue_ui *ui);
 void civue_claim_focus(civue_ui *ui);
 void civue_keep_focus(civue_ui *ui);
 // the focused widget takes a secret this frame: on macos no other app sees
@@ -370,13 +370,13 @@ void civue_keep_focus(civue_ui *ui);
 // method is told it is a password, hidden and not to be stored.
 void civue_claim_secure_input(civue_ui *ui);
 void civue_press_ring(civue_ui *ui);
-bool civue_key_pressed(civue_ui *ui, uint32_t key);
-bool civue_key_held(civue_ui *ui, uint32_t key);
+[[gnu::pure]] bool civue_key_pressed(civue_ui *ui, uint32_t key);
+[[gnu::pure]] bool civue_key_held(civue_ui *ui, uint32_t key);
 // a shortcut's label as the platform writes it, from the mac's glyphs: "⇧⌘K"
 // on macos, "Ctrl+Shift+K" elsewhere. never freed.
 const char *civue_shortcut_label(const char *mac);
 // a shortcut with the platform command modifier.
-bool civue_shortcut(civue_ui *ui, uint32_t key, bool shift);
+[[gnu::pure]] bool civue_shortcut(civue_ui *ui, uint32_t key, bool shift);
 
 /* ========================================================================== */
 /* state.                                                                     */
@@ -393,8 +393,9 @@ void *civue_memory(civue_ui *ui, civue_id id, size_t size,
                    void (*drop)(void *));
 void civue_forget(civue_ui *ui, civue_id id);
 // css's cubic-bezier timing function at `t`, and its `ease`.
-float civue_cubic_bezier(float x1, float y1, float x2, float y2, float t);
-float civue_ease(float t);
+[[gnu::const]] float civue_cubic_bezier(float x1, float y1, float x2, float y2,
+                                        float t);
+[[gnu::const]] float civue_ease(float t);
 
 /* ========================================================================== */
 /* painting, snapped to pixels.                                               */

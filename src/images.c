@@ -41,7 +41,7 @@ constexpr u32 PENDING_MAX = 128;
 typedef struct {
   atomic_uint refs;
   usize len;
-  u8 data[];
+  [[clang::counted_by(len)]] u8 data[];
 } Blob;
 
 static Blob *blob_new(const void *bytes, usize len) {

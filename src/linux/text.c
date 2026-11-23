@@ -918,7 +918,7 @@ static const GlyphEntry *glyph(civue_text_system *t, civue_atlas *mask,
   if (map_get(&t->glyph_index, key, &at)) {
     e = &t->glyphs.v[at - 1];
     civue_atlas *a = e->color ? color : mask;
-    if (e->generation == a->generation) {
+    if (e->generation == a->generation) [[clang::likely]] {
       return e;
     }
   }

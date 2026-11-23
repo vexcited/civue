@@ -111,14 +111,14 @@ void civue_dl_shift(civue_draw_list *d, float dx, float dy);
 // restricts what follows to `r` until civue_dl_pop_clip.
 void civue_dl_push_clip(civue_draw_list *d, civue_rect r);
 void civue_dl_pop_clip(civue_draw_list *d);
-civue_rect civue_dl_clip(const civue_draw_list *d);
+[[gnu::pure]] civue_rect civue_dl_clip(const civue_draw_list *d);
 // rounds the corners of what follows to those of `r` until
 // civue_dl_pop_round. clips to `r` itself are pushed apart. only the last
 // one pushed rounds.
 void civue_dl_push_round(civue_draw_list *d, civue_rect r,
                          const float radii[4]);
 void civue_dl_pop_round(civue_draw_list *d);
-civue_round civue_dl_round(const civue_draw_list *d);
+[[gnu::pure]] civue_round civue_dl_round(const civue_draw_list *d);
 // turns what is pushed next by `angle` radians around `pivot`, a zero angle
 // stops turning.
 void civue_dl_set_turn(civue_draw_list *d, float angle, civue_vec2 pivot);

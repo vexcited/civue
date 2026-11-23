@@ -42,8 +42,8 @@ void civue_damage_join(civue_damage *d, const civue_damage *other);
 // takes what `other` changed out of `d`.
 void civue_damage_without(civue_damage *d, const civue_damage *other);
 // how many pixels of a `width` by `height` window it covers, at most.
-uint64_t civue_damage_area(const civue_damage *d, uint32_t width,
-                           uint32_t height);
+[[gnu::pure]] uint64_t civue_damage_area(const civue_damage *d, uint32_t width,
+                                         uint32_t height);
 // calls `box` with each box of pixels it covers in a `width` by `height`
 // window, none over another.
 void civue_damage_each(const civue_damage *d, uint32_t width, uint32_t height,

@@ -1273,7 +1273,8 @@ void civue_text_draw(civue_text_system *t, civue_draw_list *d,
     const civue_glyph *g = &b->glyphs[i];
     const GlyphEntry *e = f->entry ? &t->glyphs.v[f->entry - 1] : nullptr;
     // an atlas that started over since has it somewhere else.
-    if (!e || e->generation != (e->color ? color : mask)->generation) {
+    if (!e || e->generation != (e->color ? color : mask)->generation)
+      [[clang::unlikely]] {
       f->entry = find(t, mask, color, g, f->sub);
       if (!f->entry || f->entry == EMPTY) {
         continue;
