@@ -6,7 +6,7 @@ if(APPLE AND NOT CMAKE_C_COMPILER AND NOT DEFINED ENV{CC})
     PATHS /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin NO_DEFAULT_PATH)
 endif()
 
-project(layout VERSION 0.1.0 LANGUAGES C)
+project(layout VERSION 0.0.0 LANGUAGES C)
 
 #   FetchContent_Declare(civue
 #     GIT_REPOSITORY https://code.vexcited.com/ciko/civue.git

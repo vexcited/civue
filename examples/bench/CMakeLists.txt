@@ -7,7 +7,7 @@ if(APPLE AND NOT CMAKE_C_COMPILER AND NOT DEFINED ENV{CC})
   set(CMAKE_OBJC_COMPILER ${CMAKE_C_COMPILER} CACHE FILEPATH "objc compiler")
 endif()
 
-project(bench VERSION 0.1.0 LANGUAGES C)
+project(bench VERSION 0.0.0 LANGUAGES C)
 
 # civue's own build provides it, otherwise it comes from this checkout.
 # an app outside of this repository fetches it instead.
