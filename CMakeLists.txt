@@ -158,11 +158,24 @@ if(CMAKE_SCRIPT_MODE_FILE)
   civue__write(${out}/civue_icons.c "${source}")
   return()
 endif()
+# c2y and the defer TS take clang 22, newer than the one Xcode ships.
+if(APPLE AND NOT CMAKE_C_COMPILER AND NOT DEFINED ENV{CC})
+  find_program(CMAKE_C_COMPILER clang
+    PATHS /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin NO_DEFAULT_PATH)
+  set(CMAKE_OBJC_COMPILER ${CMAKE_C_COMPILER} CACHE FILEPATH "objc compiler")
+endif()
+
 project(civue VERSION 0.1.0 LANGUAGES C)
 
-set(CMAKE_C_STANDARD 23)
-set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_C_EXTENSIONS ON)
+# cmake knows no standard past C23, so the flags are given by hand.
+set(CIVUE_C2Y -std=gnu2y -fdefer-ts)
+include(CheckCCompilerFlag)
+check_c_compiler_flag(-fdefer-ts CIVUE_HAS_DEFER)
+if(NOT CIVUE_HAS_DEFER)
+  message(FATAL_ERROR
+    "civue is C2y with the defer TS, set CC to clang 22 or later")
+endif()
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ${PROJECT_IS_TOP_LEVEL})
 
 if(PROJECT_IS_TOP_LEVEL AND NOT CMAKE_CONFIGURATION_TYPES
@@ -363,9 +376,6 @@ set(CIVUE_LINUX_SOURCES
 
 if(APPLE)
   enable_language(OBJC)
-  set(CMAKE_OBJC_STANDARD 23)
-  set(CMAKE_OBJC_STANDARD_REQUIRED ON)
-  set(CMAKE_OBJC_EXTENSIONS ON)
 
   add_library(civue STATIC ${CIVUE_SOURCES} ${CIVUE_DARWIN_SOURCES})
   target_compile_options(civue PRIVATE
@@ -428,7 +438,9 @@ civue_embed_shaders(civue PREFIX civue SOURCES
 target_include_directories(civue PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-target_compile_features(civue PUBLIC c_std_23)
+# an app of civue is C2y like it, cmake having no c_std_2y to ask for.
+target_compile_options(civue PUBLIC
+  "$<$<COMPILE_LANGUAGE:C,OBJC>:${CIVUE_C2Y}>")
 target_link_libraries(civue PUBLIC cilo::cilo)
 target_compile_options(civue PRIVATE
   -fno-strict-aliasing -Wall -Wextra -Wno-unused-parameter

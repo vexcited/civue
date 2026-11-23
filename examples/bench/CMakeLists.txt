@@ -1,9 +1,13 @@
 cmake_minimum_required(VERSION 3.29)
-project(bench VERSION 0.1.0 LANGUAGES C)
 
-set(CMAKE_C_STANDARD 23)
-set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_C_EXTENSIONS ON)
+# c2y and the defer TS take clang 22, newer than the one Xcode ships.
+if(APPLE AND NOT CMAKE_C_COMPILER AND NOT DEFINED ENV{CC})
+  find_program(CMAKE_C_COMPILER clang
+    PATHS /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin NO_DEFAULT_PATH)
+  set(CMAKE_OBJC_COMPILER ${CMAKE_C_COMPILER} CACHE FILEPATH "objc compiler")
+endif()
+
+project(bench VERSION 0.1.0 LANGUAGES C)
 
 # civue's own build provides it, otherwise it comes from this checkout.
 # an app outside of this repository fetches it instead.
