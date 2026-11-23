@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdckdint.h>
+#include <stddefer.h>
 #include <pwd.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -221,9 +222,9 @@ bool civue__file_read(const char *path, civue_bytes *out) {
   if (fd < 0) {
     return false;
   }
+  defer close(fd);
   struct stat st;
   if (fstat(fd, &st) < 0) {
-    close(fd);
     return false;
   }
   out->len = 0;
@@ -235,7 +236,6 @@ bool civue__file_read(const char *path, civue_bytes *out) {
       continue;
     }
     if (r < 0) {
-      close(fd);
       return false;
     }
     if (r == 0) {
@@ -243,7 +243,6 @@ bool civue__file_read(const char *path, civue_bytes *out) {
     }
     out->len += r;
   }
-  close(fd);
   return true;
 }
 

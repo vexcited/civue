@@ -284,7 +284,7 @@ char *civue_clipboard_text() {
 
 char *civue_clipboard_html() {
   static const char *mimes[] = {"text/html"};
-  return read_string(mimes, 1);
+  return read_string(mimes, countof(mimes));
 }
 
 // ---- writing ----
@@ -420,7 +420,7 @@ void civue_clipboard_set_text(const char *s, usize n) {
 
 void civue_clipboard_set_png(const u8 *png, usize n) {
   static const char *mimes[] = {"image/png"};
-  Copy c = {.mimes = mimes, .n = 1, .png = png, .png_len = n};
+  Copy c = {.mimes = mimes, .n = countof(mimes), .png = png, .png_len = n};
   civue_on_main(publish_on_main, &c);
 }
 

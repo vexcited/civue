@@ -1,6 +1,7 @@
 #include "wl.h"
 
 #include <math.h>
+#include <stddefer.h>
 #include <stdlib.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -57,13 +58,12 @@ static struct wl_buffer *shm_buffer(const u8 *rgba, u32 w, u32 h) {
   if (fd < 0) {
     return nullptr;
   }
+  defer close(fd);
   if (ftruncate(fd, (off_t)size) < 0) {
-    close(fd);
     return nullptr;
   }
   u8 *px = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   if (px == MAP_FAILED) {
-    close(fd);
     return nullptr;
   }
   for (usize i = 0; i < size; i += 4) {
@@ -77,7 +77,6 @@ static struct wl_buffer *shm_buffer(const u8 *rgba, u32 w, u32 h) {
   struct wl_buffer *b = wl_shm_pool_create_buffer(
     pool, 0, (i32)w, (i32)h, (i32)w * 4, WL_SHM_FORMAT_ARGB8888);
   wl_shm_pool_destroy(pool);
-  close(fd);
   return b;
 }
 
@@ -147,7 +146,7 @@ static struct wl_cursor_image *theme_image(const System *sys, u32 pixels) {
   if (!C.theme) {
     return nullptr;
   }
-  for (u32 i = 0; i < 2; i++) {
+  for (u32 i = 0; i < countof(sys->names); i++) {
     struct wl_cursor *c = wl_cursor_theme_get_cursor(C.theme, sys->names[i]);
     if (c && c->image_count) {
       return c->images[0];

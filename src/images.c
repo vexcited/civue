@@ -11,6 +11,7 @@
 #include <math.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stddefer.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -118,40 +119,39 @@ static Blob *read_file(const char *path) {
     return nullptr;
   }
 
+  defer close(fd);
+
   struct stat st;
-  Blob *b = nullptr;
 
-  if (fstat(fd, &st) == 0 && st.st_size > 0 &&
-      (u64)st.st_size <= FILE_BYTES_MAX) {
-    usize got = 0;
-
-    b = blob_new(nullptr, (usize)st.st_size);
-
-    while (got < b->len) {
-      ssize_t n = read(fd, b->data + got, b->len - got);
-
-      if (n < 0 && errno == EINTR) {
-        continue;
-      }
-
-      if (n <= 0) {
-        break;
-      }
-
-      got += (usize)n;
-    }
-
-    if (got == b->len) {
-      // the sweep removes the files read longest ago.
-      futimens(fd, nullptr);
-    }
-    else {
-      blob_drop(b);
-      b = nullptr;
-    }
+  if (fstat(fd, &st) != 0 || st.st_size <= 0 ||
+      (u64)st.st_size > FILE_BYTES_MAX) {
+    return nullptr;
   }
 
-  close(fd);
+  usize got = 0;
+  Blob *b = blob_new(nullptr, (usize)st.st_size);
+
+  while (got < b->len) {
+    ssize_t n = read(fd, b->data + got, b->len - got);
+
+    if (n < 0 && errno == EINTR) {
+      continue;
+    }
+
+    if (n <= 0) {
+      break;
+    }
+
+    got += (usize)n;
+  }
+
+  if (got != b->len) {
+    blob_drop(b);
+    return nullptr;
+  }
+
+  // the sweep removes the files read longest ago.
+  futimens(fd, nullptr);
   return b;
 }
 
@@ -161,10 +161,11 @@ static Blob *read_file(const char *path) {
 static void write_file(const char *path, const Blob *b, u64 serial) {
   char *part = xfmt("%s.%lx.%llx.part", path, (unsigned long)getpid(),
                     (unsigned long long)serial);
-  int fd = open(part, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+  defer free(part);
+
+  int fd = open(part, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600);
 
   if (fd < 0) {
-    free(part);
     return;
   }
 
@@ -187,8 +188,6 @@ static void write_file(const char *path, const Blob *b, u64 serial) {
   if (!ok || rename(part, path) != 0) {
     unlink(part);
   }
-
-  free(part);
 }
 
 typedef struct {
@@ -1085,14 +1084,14 @@ static bool make_dirs(char *path) {
   for (char *p = path + 1; *p; p++) {
     if (*p == '/') {
       *p = '\0';
-      mkdir(path, 0700);
+      mkdir(path, 0o700);
       *p = '/';
     }
   }
 
   struct stat st;
 
-  mkdir(path, 0700);
+  mkdir(path, 0o700);
   return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 

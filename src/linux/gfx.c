@@ -3,6 +3,7 @@
 #include <civue/gfx.h>
 
 #include <stdatomic.h>
+#include <stddefer.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -133,7 +134,7 @@ civue_gfx *civue_gfx_new(void *device) {
   g->vs = civue_vk_shader(civue_ui_vert, civue_ui_vert_len);
   g->fs = civue_vk_shader(civue_ui_frag, civue_ui_frag_len);
   VkDescriptorSetLayoutBinding binds[5];
-  for (u32 i = 0; i < 5; i++) {
+  for (u32 i = 0; i < countof(binds); i++) {
     binds[i] = (VkDescriptorSetLayoutBinding){
       .binding = i,
       .descriptorType =
@@ -144,7 +145,7 @@ civue_gfx *civue_gfx_new(void *device) {
   VkDescriptorSetLayoutCreateInfo set = {
     .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
     .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR,
-    .bindingCount = 5,
+    .bindingCount = countof(binds),
     .pBindings = binds};
   vkCreateDescriptorSetLayout(v->device, &set, nullptr, &g->set_layout);
   VkPushConstantRange push = {VK_SHADER_STAGE_VERTEX_BIT, 0, 16};
@@ -169,7 +170,7 @@ civue_gfx *civue_gfx_new(void *device) {
   VkClearColorValue zero = {};
   VkImageSubresourceRange all = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
   civue_vk_tex *fresh[] = {g->atlas_texture, g->dummy};
-  for (u32 i = 0; i < 2; i++) {
+  for (u32 i = 0; i < countof(fresh); i++) {
     civue_vk_layout(cb, fresh[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     vkCmdClearColorImage(cb, fresh[i]->image,
                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &all);
@@ -420,7 +421,7 @@ void civue_gfx_encode(civue_gfx *g, void *cbp, void *target, u32 width,
   civue_atlas *atlases[2] = {&g->atlas, &g->color_atlas};
   civue_vk_tex *textures[2] = {g->atlas_texture, g->color_atlas_texture};
   usize total = 0;
-  for (u32 k = 0; k < 2; k++) {
+  for (u32 k = 0; k < countof(atlases); k++) {
     vec_each(&atlases[k]->pending, p) {
       total +=
         ((usize)p->w * p->h * atlases[k]->bytes_per_pixel + 15) & ~(usize)15;
@@ -431,7 +432,7 @@ void civue_gfx_encode(civue_gfx *g, void *cbp, void *target, u32 width,
     total &&
     civue_vk_buf_new(total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true, &staging);
   usize at = 0;
-  for (u32 k = 0; k < 2; k++) {
+  for (u32 k = 0; k < countof(atlases); k++) {
     civue_atlas *a = atlases[k];
     vec_each(&a->pending, p) {
       usize row = (usize)p->w * a->bytes_per_pixel, len = row * p->h;
@@ -537,7 +538,7 @@ void civue_gfx_encode(civue_gfx *g, void *cbp, void *target, u32 width,
         {.sampler = g->nearest},
       };
       VkWriteDescriptorSet writes[5];
-      for (u32 i = 0; i < 5; i++) {
+      for (u32 i = 0; i < countof(writes); i++) {
         writes[i] = (VkWriteDescriptorSet){
           .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
           .dstBinding = i,
@@ -547,7 +548,7 @@ void civue_gfx_encode(civue_gfx *g, void *cbp, void *target, u32 width,
           .pImageInfo = &infos[i]};
       }
       g->vk->push_descriptor(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g->layout, 0,
-                             5, writes);
+                             countof(writes), writes);
       vkCmdDraw(cb, 4, end - batch->start, 0, batch->start);
     }
   }
@@ -561,10 +562,10 @@ bool civue_gfx_snapshot(civue_gfx *g, const civue_draw_list *list, u32 width,
     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
       VK_IMAGE_USAGE_SAMPLED_BIT,
     VK_SAMPLE_COUNT_1_BIT);
+  defer civue_vk_tex_release(target);
   usize row = (usize)width * 4, len = row * height;
   civue_vk_buf buf;
   if (!civue_vk_buf_new(len, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, &buf)) {
-    civue_vk_tex_release(target);
     return false;
   }
   VkCommandBuffer cb = civue_gfx_vk_begin(g);
@@ -581,7 +582,6 @@ bool civue_gfx_snapshot(civue_gfx *g, const civue_draw_list *list, u32 width,
   rgba->len = 0;
   buf_put(rgba, buf.mem.map, len);
   civue_vk_buf_free(&buf);
-  civue_vk_tex_release(target);
   return true;
 }
 

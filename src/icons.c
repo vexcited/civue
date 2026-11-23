@@ -2,6 +2,8 @@
 
 #include <civue/icons.h>
 
+#include <stddefer.h>
+
 typedef struct {
   f32 uv[4];
   u64 generation;
@@ -163,8 +165,8 @@ void civue_icons_draw(civue_icons *ic, civue_draw_list *d,
   Entry *e = map_get(&ic->index, key, &at) ? &ic->entries.v[at - 1] : nullptr;
   if (!e || e->generation != atlas->generation) {
     civue_bytes rgba = {};
+    defer vec_free(&rgba);
     if (!civue_svg_rasterize(s->svg, s->len, w, h, &rgba)) {
-      vec_free(&rgba);
       return;
     }
     // the tint comes from the color, only coverage is kept, unless the icon
@@ -184,7 +186,6 @@ void civue_icons_draw(civue_icons *ic, civue_draw_list *d,
       ok = civue_atlas_insert(atlas, w, h, pixels, uv);
     }
     cilo_mfree(mask);
-    vec_free(&rgba);
     if (!ok) {
       return;
     }

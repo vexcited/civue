@@ -3,6 +3,7 @@
 #include <civue/rich.h>
 #include <civue/system.h>
 #include <ctype.h>
+#include <stddefer.h>
 
 // ---- the doc ----
 
@@ -902,6 +903,7 @@ rich_edit_at(civue_ui *ui, civue_id id, civue_vec2 origin, f32 width,
              civue_rich_colors colors, bool multiline) {
   civue_rich_lay l;
   civue_rich_layout(ui, d, style, width, &l);
+  defer civue_rich_lay_free(&l);
   civue_rect area = rect_xywh(origin.x, origin.y, width, l.height);
   civue_response resp = civue_interact(ui, id, area, CIVUE_SENSE_DRAG);
   if (resp.hovered) {
@@ -911,7 +913,6 @@ rich_edit_at(civue_ui *ui, civue_id id, civue_vec2 origin, f32 width,
   if (ui->focus != id) {
     civue_forget(ui, id);
     civue_rich_paint(ui, d, &l, origin, style, colors);
-    civue_rich_lay_free(&l);
     return out;
   }
   civue_claim_focus(ui);
@@ -1004,7 +1005,6 @@ rich_edit_at(civue_ui *ui, civue_id id, civue_vec2 origin, f32 width,
                colors.text, 0);
   }
   civue_request_repaint_after(ui, 0.53 - fmod(since, 0.53));
-  civue_rich_lay_free(&l);
   return out;
 }
 

@@ -10,6 +10,7 @@
 #include <hb-ot.h>
 #include <hb.h>
 #include <math.h>
+#include <stddefer.h>
 #include <stdlib.h>
 
 // horizontal positions a glyph is rasterized at within a pixel.
@@ -922,10 +923,10 @@ static const GlyphEntry *glyph(civue_text_system *t, civue_atlas *mask,
     }
   }
   civue_bytes px = {};
+  defer vec_free(&px);
   i32 left = 0, top = 0;
   u32 w = 0, h = 0;
   if (!rasterize(f, g->id, subpixel, &px, &left, &top, &w, &h)) {
-    vec_free(&px);
     return nullptr;
   }
   civue_atlas *a = f->color ? color : mask;
@@ -934,11 +935,9 @@ static const GlyphEntry *glyph(civue_text_system *t, civue_atlas *mask,
     // a full atlas starts over, glyphs come back as frames need them.
     civue_atlas_clear(a);
     if (!civue_atlas_insert(a, w, h, px.v, uv)) {
-      vec_free(&px);
       return nullptr;
     }
   }
-  vec_free(&px);
   GlyphEntry n = {
     key,          {uv[0], uv[1], uv[2], uv[3]}, f->color, left, top, w, h,
     a->generation};

@@ -4,6 +4,7 @@
 #include <civue/base.h>
 
 #include <cilo/cilo.h>
+#include <stdcountof.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -19,7 +20,6 @@ typedef float f32;
 typedef double f64;
 typedef size_t usize;
 
-#define countof(a) (sizeof(a) / sizeof((a)[0]))
 // foundation has its own.
 #ifndef MIN
 #define MIN(a, b) ((a) < (b) ? (a) : (b))

@@ -494,7 +494,7 @@ static bool relative(const civue_node_layout *l) {
   const civue_length *sizes[] = {&l->w,     &l->h,     &l->min_w,
                                  &l->min_h, &l->max_w, &l->max_h,
                                  &l->basis, &l->gap_x, &l->gap_y};
-  for (u32 i = 0; i < sizeof sizes / sizeof *sizes; i++) {
+  for (u32 i = 0; i < countof(sizes); i++) {
     if (sizes[i]->unit == CIVUE_UNIT_RELATIVE) {
       return true;
     }
@@ -2168,21 +2168,21 @@ void civue_memo_end(civue_memo_scope *s) {
 // the memos recorded this frame are kept when the solve left their nodes
 // where they were painted.
 static void keep_memos(civue_ui *ui, civue_tree *t) {
+memos:
   vec_each(&t->taken, k) {
     Memo *m = memo_find(t, k->id);
     if (!m) {
       continue;
     }
 
-    bool settled = true;
-    for (u32 i = k->node; i < k->node_end && settled; i++) {
+    for (u32 i = k->node; i < k->node_end; i++) {
       const Node *n = &t->nodes.v[i];
-      settled = near(n->x, n->ux) && near(n->y, n->uy) && near(n->w, n->uw) &&
-                near(n->h, n->uh) && near(n->cw, n->ucw) && near(n->ch, n->uch);
-    }
-
-    if (!settled) {
-      continue;
+      bool settled = near(n->x, n->ux) && near(n->y, n->uy) &&
+                     near(n->w, n->uw) && near(n->h, n->uh) &&
+                     near(n->cw, n->ucw) && near(n->ch, n->uch);
+      if (!settled) {
+        continue memos;
+      }
     }
 
     m->start = k->node;

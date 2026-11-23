@@ -76,6 +76,7 @@ static char *attribute(const char *p, const char *end, const char *name) {
         return nullptr;
       }
       civue_bytes b = {};
+    bytes:
       for (const char *x = from; x < to;) {
         static const struct {
           const char *from, *to;
@@ -85,18 +86,15 @@ static char *attribute(const char *p, const char *end, const char *name) {
                         {"&lt;", "<"},
                         {"&gt;", ">"}};
 
-        bool found = false;
-        for (u32 k = 0; *x == '&' && k < countof(entities) && !found; k++) {
+        for (u32 k = 0; *x == '&' && k < countof(entities); k++) {
           usize el = strlen(entities[k].from);
           if (x + el <= to && !memcmp(x, entities[k].from, el)) {
             buf_puts(&b, entities[k].to);
             x += el;
-            found = true;
+            continue bytes;
           }
         }
-        if (!found) {
-          buf_putc(&b, *x++);
-        }
+        buf_putc(&b, *x++);
       }
       return buf_take(&b);
     }

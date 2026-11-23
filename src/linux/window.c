@@ -504,7 +504,7 @@ static GVariant *portal_setting(const char *ns, const char *key) {
   }
   // ReadOne answers the value, Read of older portals a variant of it.
   const char *methods[] = {"ReadOne", "Read"};
-  for (u32 m = 0; m < 2; m++) {
+  for (u32 m = 0; m < countof(methods); m++) {
     GVariant *r = g_dbus_connection_call_sync(
       bus, "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop",
       "org.freedesktop.portal.Settings", methods[m],
@@ -624,7 +624,7 @@ static void set_layout(const char *layout) {
   }
   // the menus show somewhere: at the start when the layout leaves them out.
   bool menu = false;
-  for (u32 i = 0; i < 4; i++) {
+  for (u32 i = 0; i < countof(W.start); i++) {
     menu |= W.start[i] == CIVUE_TITLE_MENU || W.end[i] == CIVUE_TITLE_MENU;
   }
   if (!menu) {
@@ -858,7 +858,7 @@ static void civue_button(u32 code, bool down) {
 }
 
 static void released_all() {
-  for (u32 i = 0; i < 3; i++) {
+  for (u32 i = 0; i < countof(W.input.down); i++) {
     if (W.input.down[i]) {
       W.input.down[i] = false;
       W.input.released[i] = true;

@@ -1,5 +1,6 @@
 #include "words.h"
 
+#include <stdcountof.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -18,7 +19,7 @@ void words(char *out, size_t size, unsigned seed, int n) {
   for (int i = 0; i < n; i++) {
     x = x * 1103515245u + 12345u;
 
-    const char *word = WORDS[(x >> 16) % 32];
+    const char *word = WORDS[(x >> 16) % countof(WORDS)];
     size_t len = strlen(word);
 
     if (at + len + 2 > size) {

@@ -4,6 +4,8 @@
 
 #include "darwin.h"
 
+#include <stddefer.h>
+
 // an image no window could show whole, refused rather than decoded.
 static const usize decoded_pixels_max = 64u << 20;
 
@@ -149,6 +151,8 @@ bool civue__image_decode_frames(const u8 *bytes, usize n, u32 max_pixels,
       return false;
     }
 
+    defer CFRelease(source);
+
     usize count = CGImageSourceGetCount(source);
     NSDictionary *first = CFBridgingRelease(
       count > 1 ? CGImageSourceCopyPropertiesAtIndex(source, 0, nullptr)
@@ -158,7 +162,6 @@ bool civue__image_decode_frames(const u8 *bytes, usize n, u32 max_pixels,
 
     if (count < 2 || width < 1 || height < 1 ||
         width * height > decoded_pixels_max) {
-      CFRelease(source);
       return false;
     }
 
@@ -176,7 +179,6 @@ bool civue__image_decode_frames(const u8 *bytes, usize n, u32 max_pixels,
 
     // so many frames that each would be a smudge: the first one is better.
     if (MAX(w, h) < MIN(longest, 64.0)) {
-      CFRelease(source);
       return false;
     }
 
@@ -194,8 +196,6 @@ bool civue__image_decode_frames(const u8 *bytes, usize n, u32 max_pixels,
         CGImageRelease(image);
       }
     }
-
-    CFRelease(source);
 
     if (!ok) {
       free(rgba);
