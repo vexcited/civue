@@ -370,8 +370,7 @@ set(CIVUE_DARWIN_SOURCES
 set(CIVUE_LINUX_SOURCES
   src/linux/clipboard.c src/linux/cursors.c src/linux/filepanel.c
   src/linux/gfx.c src/linux/image.c src/linux/pasteboard.c src/linux/spell.c
-  src/linux/svg.c src/linux/text.c src/linux/video.c src/linux/vk.c
-  src/linux/webview.c
+  src/linux/svg.c src/linux/text.c src/linux/vk.c src/linux/webview.c
   src/linux/window.c)
 
 if(APPLE)
@@ -398,6 +397,18 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     gio-2.0 wayland-client wayland-cursor xkbcommon enchant-2)
   target_link_libraries(civue PUBLIC
     PkgConfig::CIVUE_DEPS Threads::Threads m)
+
+  # videos play through gstreamer where it is installed.
+  pkg_check_modules(CIVUE_GSTREAMER IMPORTED_TARGET
+    gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0)
+
+  if(CIVUE_GSTREAMER_FOUND)
+    target_sources(civue PRIVATE src/linux/video.c)
+    target_link_libraries(civue PUBLIC PkgConfig::CIVUE_GSTREAMER)
+  else()
+    message(STATUS "civue: no gstreamer, videos are left out")
+    target_sources(civue PRIVATE src/linux/novideo.c)
+  endif()
 
   # the wayland protocols past the core one, their client code generated.
   pkg_get_variable(CIVUE_SCANNER_PATH wayland-scanner wayland_scanner)

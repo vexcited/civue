@@ -9,9 +9,9 @@ extern "C" {
 
 /* ========================================================================== */
 /* a video from an url, played by the system with its sound, its picture a    */
-/* texture to draw. AVFoundation on macos. linux has none yet:                */
-/* civue_video_new answers nullptr there, and the rest takes it. everything   */
-/* here runs on the main thread.                                              */
+/* texture to draw. AVFoundation on macos, GStreamer on linux, where a build  */
+/* without it has civue_video_new answer nullptr and the rest take it.        */
+/* everything here runs on the main thread.                                   */
 /*                                                                            */
 /*   civue_video *v = civue_video_new(url, &(civue_video_options){.loop = 1});*/
 /*   ... each frame it shows:                                                 */
