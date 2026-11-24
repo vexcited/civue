@@ -72,6 +72,8 @@ struct civue_text_system {
   // the system's sans-serif and monospace faces by weight, while the app sets
   // none.
   civue_map system;
+  // the families looked up for them, the system's own when empty.
+  char families[2][128];
   bool emoji_looked;
   Vec(Font) fonts;
   civue_map font_index;
@@ -209,6 +211,15 @@ void civue_text_set_face(civue_text_system *t, civue_face face, const u8 *data,
   source_replace(t, face == CIVUE_FACE_CODE ? SRC_CODE : SRC_UI, data, n);
 }
 
+void civue_text_set_family(civue_text_system *t, civue_face face,
+                           const char *family) {
+  bool code = face == CIVUE_FACE_CODE;
+  snprintf(t->families[code], sizeof t->families[code], "%s",
+           family ? family : "");
+  map_clear(&t->system);
+  forget_layouts(t);
+}
+
 // a face the system has, its bytes read once, nullptr when unreadable.
 static u32 file_source(civue_text_system *t, const char *path, u32 index,
                        bool color) {
@@ -289,8 +300,11 @@ static u32 face_source(civue_text_system *t, bool code, f32 weight,
     return (u32)v;
   }
   FcPattern *p = FcPatternCreate();
-  FcPatternAddString(p, FC_FAMILY,
-                     (const FcChar8 *)(code ? "monospace" : "sans-serif"));
+  const char *family = t->families[code];
+  if (!*family) {
+    family = code ? "monospace" : "sans-serif";
+  }
+  FcPatternAddString(p, FC_FAMILY, (const FcChar8 *)family);
   FcPatternAddDouble(p, FC_WEIGHT, FcWeightFromOpenTypeDouble(weight));
   FcPatternAddInteger(p, FC_SLANT, italic ? FC_SLANT_ITALIC : FC_SLANT_ROMAN);
   FcConfigSubstitute(nullptr, p, FcMatchPattern);

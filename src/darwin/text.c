@@ -248,6 +248,27 @@ void civue_text_set_face(civue_text_system *t, civue_face face, const u8 *data,
   forget_layouts(t);
 }
 
+void civue_text_set_family(civue_text_system *t, civue_face face,
+                           const char *family) {
+  CFStringRef name =
+    CFStringCreateWithCString(nullptr, family, kCFStringEncodingUTF8);
+  if (!name) {
+    return;
+  }
+  const void *keys[] = {kCTFontFamilyNameAttribute};
+  const void *values[] = {name};
+  CFDictionaryRef attributes =
+    CFDictionaryCreate(nullptr, keys, values, 1, &kCFTypeDictionaryKeyCallBacks,
+                       &kCFTypeDictionaryValueCallBacks);
+  CTFontDescriptorRef desc = CTFontDescriptorCreateWithAttributes(attributes);
+  CFRelease(attributes);
+  CFRelease(name);
+  CTFontDescriptorRef *slot = face == CIVUE_FACE_CODE ? &t->code : &t->ui;
+  CFRelease(*slot);
+  *slot = desc;
+  forget_layouts(t);
+}
+
 // the index of a font, kept for the glyphs drawn with it.
 static u32 font_of(civue_text_system *t, CTFontRef font) {
   u64 h = (u64)CFHash(font) | 1;

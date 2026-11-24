@@ -142,6 +142,10 @@ void civue_text_register_display(civue_text_system *t, uint8_t display,
 // was laid out is laid out again.
 void civue_text_set_face(civue_text_system *t, civue_face face,
                          const uint8_t *data, size_t n);
+// sets the ui or the code face in a family the system has, like "Hack Nerd
+// Font", each weight its own. what was laid out is laid out again.
+void civue_text_set_family(civue_text_system *t, civue_face face,
+                           const char *family);
 
 #ifdef __cplusplus
 }
