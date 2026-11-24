@@ -16,6 +16,7 @@
 #undef div
 #undef text
 #undef icon
+#undef icon_of
 #undef memo
 #undef rows
 #undef here
