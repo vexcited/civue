@@ -118,9 +118,9 @@ The modules stack in that order and each only uses the ones above it. An app tha
 
 ## Doing less
 
-- **Frames the window shows already are not drawn.** A frame's quads are compared with the last frame's, and one that draws the same over the same color at the same size is neither drawn nor presented: an app that asks for frames while nothing moves costs a tenth of a millisecond each. A frame drawing a texture the app registered itself is always drawn, since the app may have drawn into it. macOS only for now.
+- **Frames the window shows already are not drawn.** A frame's quads are compared with the last frame's, and one that draws the same over the same color at the same size is neither drawn nor presented: an app that asks for frames while nothing moves costs a tenth of a millisecond each. A frame drawing a texture the app registered itself is always drawn, since the app may have drawn into it.
 - **Only what changed is drawn.** The comparison also tells which quads changed, marked on a grid of tiles a cache line wide. A hover, a caret or a typed letter draws a few tiles, on the cpu, into a surface of the window's own that a layer shows as it is, without a copy.
-- **The gpu is left alone until it is needed.** Its driver keeps about 120 MB for as long as it is given work, however little, and for seconds after, and no call, public or private, makes it keep less. So the cpu draws every frame it can, scrolls and animations over the whole window included. A frame goes to the gpu when what changed holds an image, when it would take the fill of 32 million pixels, or when an animation's frames come late three times in a row with the drawing taking most of their time. An app without those never makes a Metal device.
+- **The gpu is left alone until it is needed.** Its driver keeps about 120 MB for as long as it is given work, however little, and for seconds after, and no call, public or private, makes it keep less. So the cpu draws every frame it can, scrolls and animations over the whole window included. A frame goes to the gpu when what changed holds an image, when it would take the fill of 32 million pixels, or when an animation's frames come late three times in a row with the drawing taking most of their time. An app without those never makes a Metal device. On Linux the frames go to `wl_shm` buffers the same way, and a Vulkan swapchain takes the surface for the frames that need the gpu, a texture the app registered among them, until two and a half seconds after the last one. An app without those never loads a Vulkan driver, and `CIVUE_DRAW=gpu` or `cpu` says who draws whatever the frame.
 - **Three surfaces take turns.** The window server still reads the last frame while the next is drawn, so a frame goes into another surface, which remembers the tiles it missed while it waited and has them drawn again with the new ones. Tiles an opaque rect covers whole are not cleared first, and the rows about to be written are asked of memory four rows ahead, which takes a third off the time of fills scattered over a window. The surfaces not shown are freed two seconds after the last frame.
 - **Rows.** `rows(count, row_height, i) { ... }` in a node that scrolls builds only the rows in view, two more past each end, each a node `row_height` tall known by its index. A hundred thousand rows cost what a screen of them does, and a row scrolled into view was laid out the frame before, so scrolling runs no frame twice. Rows are all of one height.
 - **Memos.** `memo(id, inputs) { ... }` keeps the nodes its block builds, their layout, what they draw and what takes the pointer, and puts them back without running the block while `inputs` stays the same: a hash of everything the block reads, as `civue_hash` makes one. What is put back moves with what holds it, by whole pixels, so the rows of a scrolling list are built once.
@@ -209,7 +209,7 @@ civue_icons(app ICONS mdi:home COLLECTIONS app=${CMAKE_CURRENT_SOURCE_DIR}/icons
   `civue_input.drops`, and `install_menus` builds the menu bar.
 - **Linux.** Wayland only: xdg shell with client side decorations drawn by the app when it has a title bar,
   fractional scaling with viewporter, text-input-v3 for input methods, tablets, pinch gestures, cursor shapes,
-  xdg-activation and xdg-foreign for portals. Its rounded corners are cut out of the swapchain image. The
+  xdg-activation and xdg-foreign for portals. Its rounded corners are cut out of the frame, on the cpu or the gpu. The
   desktop's dark mode and button layout come from the settings portal. `civue_watch_fd` drives another event loop
   from civue's, like libdispatch's main queue.
 - **Cursors.** System cursors by kind, and the app's own images by kind and angle through
@@ -217,7 +217,7 @@ civue_icons(app ICONS mdi:home COLLECTIONS app=${CMAKE_CURRENT_SOURCE_DIR}/icons
 
 ## Web views
 
-- **A page over a rect.** `civue_webview_new` makes a web view of the system's, a `WKWebView` on macOS, and `civue_webview_show(ui, w, r)` shows it over `r` for the frame, as a widget is called: a frame that does not call it hides it, and the keys go back to the window when the page had them. The app paints what is around it, a card or a spinner, and with `transparent` the ui shows through where the page paints nothing.
+- **A page over a rect.** `civue_webview_new` makes a web view of the system's, a `WKWebView` on macOS and WPE WebKit on Linux, and `civue_webview_show(ui, w, r)` shows it over `r` for the frame, as a widget is called: a frame that does not call it hides it, and the keys go back to the window when the page had them. The app paints what is around it, a card or a spinner, and with `transparent` the ui shows through where the page paints nothing.
 - **Messages.** A page calls `window.civue.postMessage(text)`, the same on every platform, and the app's `message` gets the text on the main thread. `civue_webview_eval` runs javascript in the page for the other way. Only the page's main frame is heard, not the frames it embeds.
 - **Its own origin.** `civue_webview_load_html` takes the origin the page believes it is on, which is what a captcha or a login widget checks, and cookies are kept between runs as a browser keeps them.
 - **Links leave.** A link to a new window, or one the user clicks to another site, opens in the system's browser.
@@ -244,12 +244,20 @@ extensions, clang 19 or later or Apple clang 21, CMake 3.29 and Ninja.
 
 - **macOS 14 or later**, Apple silicon, with Xcode's Metal toolchain: `xcodebuild -downloadComponent MetalToolchain`.
 - **Linux** with glslc, Vulkan, Wayland with wayland-scanner, xkbcommon, FreeType, HarfBuzz, fontconfig, FriBidi,
-  librsvg, cairo, GIO and enchant. On Ubuntu:
+  librsvg, cairo, GIO and enchant. GStreamer plays videos and WPE WebKit shows web views where they are installed,
+  both are left out otherwise. Vulkan is only loaded once a frame needs the gpu. On Ubuntu:
 
 ```sh
 sudo apt install clang cmake ninja-build pkg-config glslc libvulkan-dev libwayland-dev libwayland-bin \
   libxkbcommon-dev libfreetype-dev libharfbuzz-dev libfontconfig-dev libfribidi-dev librsvg2-dev libcairo2-dev \
-  libglib2.0-dev libenchant-2-dev
+  libglib2.0-dev libenchant-2-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libwpewebkit-2.0-dev
+```
+
+On Arch:
+
+```sh
+sudo pacman -S clang cmake ninja pkgconf shaderc vulkan-headers vulkan-icd-loader wayland xkbcommon freetype2 \
+  harfbuzz fontconfig fribidi librsvg cairo glib2 enchant gstreamer gst-plugins-base gst-plugins-good gst-libav wpewebkit
 ```
 
 ```sh
@@ -274,8 +282,9 @@ target_link_libraries(app PRIVATE civue::civue)
 ## Limits
 
 - One window per process for now, and Wayland only on Linux.
-- Web views are macOS only for now: `civue_webview_new` answers null on Linux and the rest does nothing with it. One is a view of the system's over the frame, so nothing civue draws goes over it, menus and tooltips included, and a transparent one asks `WKWebView` not to paint its background through a key that is not public.
-- Linux draws every frame it builds on the gpu, the ones the window shows already included.
+- On Linux a web view's page is painted by WPE WebKit into memory and drawn in the frame as an image, so the app's overlays go over it. It takes the pointer and the keys the frame gets while it has the focus, without input methods, and nothing is dragged out of it. On macOS one is a view of the system's over the frame, so nothing civue draws goes over it, menus and tooltips included, and a transparent one asks `WKWebView` not to paint its background through a key that is not public.
+- On Linux, overlays that go past the window's edges are drawn in an `xdg_popup` over the screen. Wayland does not tell a window where it is, so civue finds the screen's corners from two popups the compositor slides back onto it, never shown. A compositor that does not slide popups keeps the overlays in the window. Layer surfaces always do.
+- A video on Linux is decoded to rgba by GStreamer and uploaded each picture, on the cpu, which a 4K one is slow for.
 - On macOS a frame whose changes hold an image is drawn by the gpu, as are the frames of a window in full screen with its own title bar, and the driver's 120 MB come with them until two and a half seconds after the last.
 - `CTFontShapeGlyphs` is private to Core Text and found by name at run time, so a store review may refuse an app for it.
 - Menus keep 8 points around their rows: geometry the pointer depends on, set by civue while the app paints them.
