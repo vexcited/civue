@@ -1,6 +1,7 @@
 #include "../internal.h"
 
 #include <civue/gfx.h>
+#include <civue/raster.h>
 
 #include <stdatomic.h>
 #include <stddefer.h>
@@ -10,9 +11,13 @@
 extern const unsigned char civue_ui_vert[], civue_ui_frag[];
 extern const size_t civue_ui_vert_len, civue_ui_frag_len;
 
+// an image the list draws. one civue uploaded keeps its pixels for the cpu,
+// and its texture is made by the first frame the gpu draws it in.
 typedef struct {
   civue_texture id;
   civue_vk_tex *texture;
+  u8 *pixels;
+  u32 width, height;
 } Image;
 
 typedef struct {
@@ -34,7 +39,10 @@ typedef struct {
 constexpr u32 QUAD_BUFFERS = 4;
 
 struct civue_gfx {
+  // null until the gpu first draws: a window the cpu draws alone never
+  // makes a device.
   const civue_vk_device *vk;
+  bool tried;
   civue_vk_cmds cmds;
   QuadBuffer quad_buffers[QUAD_BUFFERS];
   VkShaderModule vs, fs;
@@ -88,7 +96,12 @@ static void ready_to_sample(VkCommandBuffer cb, civue_vk_tex *t) {
   civue_vk_layout(cb, t, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 
+static bool ready(civue_gfx *g);
+
 VkCommandBuffer civue_gfx_vk_begin(civue_gfx *g) {
+  if (!ready(g)) {
+    die("vulkan: no device to draw the ui with");
+  }
   return civue_vk_cmds_begin(&g->cmds);
 }
 
@@ -124,11 +137,24 @@ civue_vk_tex *civue_gfx_vk_wrap(VkImage image, VkImageView view,
 }
 
 civue_gfx *civue_gfx_new(void *device) {
+  civue_gfx *g = xcalloc(1, sizeof *g);
+  g->atlas.bytes_per_pixel = 1;
+  g->color_atlas.bytes_per_pixel = 4;
+  g->atlas.keeps = g->color_atlas.keeps = true;
+  g->next_id = 1;
+  return g;
+}
+
+// what the gpu draws with, made once. false when there is no device.
+static bool ready(civue_gfx *g) {
+  if (g->tried) {
+    return g->vk;
+  }
+  g->tried = true;
   const civue_vk_device *v = civue_vk();
   if (!v) {
-    die("vulkan: no device to draw the ui with");
+    return false;
   }
-  civue_gfx *g = xcalloc(1, sizeof *g);
   g->vk = v;
   civue_vk_cmds_init(&g->cmds, CIVUE_VK_LANE_UI);
   g->vs = civue_vk_shader(civue_ui_vert, civue_ui_vert_len);
@@ -160,13 +186,11 @@ civue_gfx *civue_gfx_new(void *device) {
                                VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, false, 1);
   g->nearest = civue_vk_sampler(
     VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, false, 1);
-  g->atlas.bytes_per_pixel = 1;
-  g->color_atlas.bytes_per_pixel = 4;
   g->atlas_texture =
     texture(VK_FORMAT_R8_UNORM, CIVUE_ATLAS_SIZE, CIVUE_ATLAS_SIZE);
   g->dummy = texture(VK_FORMAT_R8G8B8A8_UNORM, 1, 1);
   // both start cleared, ready to sample.
-  VkCommandBuffer cb = civue_gfx_vk_begin(g);
+  VkCommandBuffer cb = civue_vk_cmds_begin(&g->cmds);
   VkClearColorValue zero = {};
   VkImageSubresourceRange all = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
   civue_vk_tex *fresh[] = {g->atlas_texture, g->dummy};
@@ -177,12 +201,24 @@ civue_gfx *civue_gfx_new(void *device) {
     ready_to_sample(cb, fresh[i]);
   }
   civue_gfx_vk_submit(g, cb, VK_NULL_HANDLE, VK_NULL_HANDLE);
-  g->next_id = 1;
-  return g;
+  // the glyphs the cpu's frames made are all to upload.
+  g->atlas.stale = g->color_atlas.stale = true;
+  return true;
 }
 
 void civue_gfx_free(civue_gfx *g) {
   if (!g) {
+    return;
+  }
+  vec_each(&g->images, i) {
+    civue_vk_tex_release(i->texture);
+    free(i->pixels);
+  }
+  vec_free(&g->images);
+  civue_atlas_free(&g->atlas);
+  civue_atlas_free(&g->color_atlas);
+  if (!g->vk) {
+    free(g);
     return;
   }
   VkDevice d = g->vk->device;
@@ -191,15 +227,9 @@ void civue_gfx_free(civue_gfx *g) {
     vkDestroyPipeline(d, p->state, nullptr);
   }
   vec_free(&g->pipelines);
-  vec_each(&g->images, i) {
-    civue_vk_tex_release(i->texture);
-  }
-  vec_free(&g->images);
   for (u32 i = 0; i < QUAD_BUFFERS; i++) {
     civue_vk_buf_free(&g->quad_buffers[i].buf);
   }
-  civue_atlas_free(&g->atlas);
-  civue_atlas_free(&g->color_atlas);
   civue_vk_tex_release(g->atlas_texture);
   civue_vk_tex_release(g->color_atlas_texture);
   civue_vk_tex_release(g->dummy);
@@ -217,11 +247,11 @@ void civue_gfx_free(civue_gfx *g) {
 }
 
 void *civue_gfx_device(civue_gfx *g) {
-  return (void *)g->vk;
+  return ready(g) ? (void *)g->vk : nullptr;
 }
 
 void *civue_gfx_queue(civue_gfx *g) {
-  return g->vk->queue;
+  return ready(g) ? g->vk->queue : nullptr;
 }
 
 civue_atlas *civue_gfx_atlas(civue_gfx *g) {
@@ -349,6 +379,9 @@ void civue_gfx_update_texture(civue_gfx *g, civue_texture tid, void *t) {
   civue_vk_tex_retain(t);
   civue_vk_tex_release(i->texture);
   i->texture = t;
+  // no longer the pixels civue uploaded.
+  free(i->pixels);
+  i->pixels = nullptr;
 }
 
 void civue_gfx_free_texture(civue_gfx *g, civue_texture tid) {
@@ -357,24 +390,38 @@ void civue_gfx_free_texture(civue_gfx *g, civue_texture tid) {
     return;
   }
   civue_vk_tex_release(i->texture);
+  free(i->pixels);
   *i = vec_last(&g->images);
   g->images.len--;
 }
 
 civue_texture civue_gfx_upload_image(civue_gfx *g, u32 w, u32 h,
                                      const u8 *rgba) {
-  civue_vk_tex *t = texture(VK_FORMAT_R8G8B8A8_UNORM, w, h);
-  VkCommandBuffer cb = civue_gfx_vk_begin(g);
-  upload(g, cb, t, 0, 0, w, h, (usize)w * 4, rgba);
-  ready_to_sample(cb, t);
-  civue_gfx_vk_submit(g, cb, VK_NULL_HANDLE, VK_NULL_HANDLE);
-  civue_texture tid = civue_gfx_register_texture(g, t);
-  civue_vk_tex_release(t);
+  civue_texture tid = g->next_id++;
+  usize len = (usize)w * h * 4;
+  u8 *pixels = xmalloc(len ? len : 1);
+  memcpy(pixels, rgba, len);
+  vec_push(&g->images, ((Image){tid, nullptr, pixels, w, h}));
   return tid;
 }
 
-bool civue_gfx_pixels(civue_gfx *, civue_texture, civue_pixels *) {
-  return false;
+bool civue_gfx_pixels(civue_gfx *g, civue_texture tid, civue_pixels *out) {
+  Image *i = image(g, tid);
+  if (!i || !i->pixels) {
+    return false;
+  }
+  *out = (civue_pixels){i->pixels, i->width, i->height, (usize)i->width * 4};
+  return true;
+}
+
+bool civue_gfx_static(civue_gfx *g, const civue_draw_list *list) {
+  vec_each(&list->batches, b) {
+    Image *i = b->texture ? image(g, b->texture) : nullptr;
+    if (i && !i->pixels) {
+      return false;
+    }
+  }
+  return true;
 }
 
 // a free buffer of at least `len` bytes, marked busy, or nullptr when the
@@ -407,7 +454,7 @@ void civue_gfx_encode(civue_gfx *g, void *cbp, void *target, u32 width,
                       const civue_color *clear) {
   VkCommandBuffer cb = cbp;
   civue_vk_tex *dst = target;
-  if (g->color_atlas.pending.len && !g->color_atlas_texture) {
+  if (g->color_atlas.pixels && !g->color_atlas_texture) {
     g->color_atlas_texture =
       texture(VK_FORMAT_R8G8B8A8_UNORM, CIVUE_ATLAS_SIZE, CIVUE_ATLAS_SIZE);
     VkClearColorValue zero = {};
@@ -416,45 +463,53 @@ void civue_gfx_encode(civue_gfx *g, void *cbp, void *target, u32 width,
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     vkCmdClearColorImage(cb, g->color_atlas_texture->image,
                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &all);
+    g->color_atlas.stale = true;
   }
-  // the glyphs and icons new this frame, through one staging buffer.
+  // the glyphs and icons the textures do not have yet, from the pixels the
+  // atlases keep: the rows in use of a stale one, else what was added.
   civue_atlas *atlases[2] = {&g->atlas, &g->color_atlas};
   civue_vk_tex *textures[2] = {g->atlas_texture, g->color_atlas_texture};
-  usize total = 0;
-  for (u32 k = 0; k < countof(atlases); k++) {
-    vec_each(&atlases[k]->pending, p) {
-      total +=
-        ((usize)p->w * p->h * atlases[k]->bytes_per_pixel + 15) & ~(usize)15;
-    }
-  }
-  civue_vk_buf staging = {};
-  bool staged =
-    total &&
-    civue_vk_buf_new(total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true, &staging);
-  usize at = 0;
   for (u32 k = 0; k < countof(atlases); k++) {
     civue_atlas *a = atlases[k];
-    vec_each(&a->pending, p) {
-      usize row = (usize)p->w * a->bytes_per_pixel, len = row * p->h;
-      if (staged && p->w && p->h) {
-        memcpy(staging.mem.map + at, p->data.v, len);
-        civue_vk_layout(cb, textures[k], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        VkBufferImageCopy region = {
-          .bufferOffset = at,
-          .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-          .imageOffset = {(i32)p->x, (i32)p->y, 0},
-          .imageExtent = {p->w, p->h, 1}};
-        vkCmdCopyBufferToImage(cb, staging.buffer, textures[k]->image,
-                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
-                               &region);
+    usize bpp = a->bytes_per_pixel;
+    if (a->pixels && textures[k]) {
+      if (a->stale && a->top) {
+        upload(g, cb, textures[k], 0, 0, CIVUE_ATLAS_SIZE, a->top,
+               (usize)CIVUE_ATLAS_SIZE * bpp, a->pixels);
       }
-      at += (len + 15) & ~(usize)15;
-      vec_free(&p->data);
+      else if (!a->stale) {
+        vec_each(&a->pending, p) {
+          if (!p->w || !p->h) {
+            continue;
+          }
+          // its rows are the atlas's, as long as the atlas is wide.
+          civue_vk_buf staging;
+          usize row = (usize)p->w * bpp;
+          if (!civue_vk_buf_new(row * p->h, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                true, &staging)) {
+            continue;
+          }
+          for (u32 y = 0; y < p->h; y++) {
+            memcpy(staging.mem.map + y * row,
+                   a->pixels +
+                     ((usize)(p->y + y) * CIVUE_ATLAS_SIZE + p->x) * bpp,
+                   row);
+          }
+          civue_vk_layout(cb, textures[k],
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+          VkBufferImageCopy region = {
+            .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+            .imageOffset = {(i32)p->x, (i32)p->y, 0},
+            .imageExtent = {p->w, p->h, 1}};
+          vkCmdCopyBufferToImage(cb, staging.buffer, textures[k]->image,
+                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                                 &region);
+          vec_push(&g->staging, staging);
+        }
+      }
     }
+    a->stale = false;
     a->pending.len = 0;
-  }
-  if (staged) {
-    vec_push(&g->staging, staging);
   }
   ready_to_sample(cb, g->atlas_texture);
   if (g->color_atlas_texture) {
@@ -462,7 +517,16 @@ void civue_gfx_encode(civue_gfx *g, void *cbp, void *target, u32 width,
   }
   vec_each(&list->batches, b) {
     Image *img = b->texture ? image(g, b->texture) : nullptr;
-    if (img) {
+    if (!img) {
+      continue;
+    }
+    // an image the cpu alone drew so far.
+    if (!img->texture && img->pixels && img->width && img->height) {
+      img->texture = texture(VK_FORMAT_R8G8B8A8_UNORM, img->width, img->height);
+      upload(g, cb, img->texture, 0, 0, img->width, img->height,
+             (usize)img->width * 4, img->pixels);
+    }
+    if (img->texture) {
       ready_to_sample(cb, img->texture);
     }
   }
@@ -520,7 +584,7 @@ void civue_gfx_encode(civue_gfx *g, void *cbp, void *target, u32 width,
       const civue_batch *batch = &list->batches.v[b];
       u32 end = b + 1 < list->batches.len ? list->batches.v[b + 1].start
                                           : list->quads.len;
-      u8 want = g->erasing ? 2 : batch->multiply ? 1 : 0;
+      u8 want = g->erasing || batch->erase ? 2 : batch->multiply ? 1 : 0;
       if (want != mode) {
         mode = want;
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -530,7 +594,7 @@ void civue_gfx_encode(civue_gfx *g, void *cbp, void *target, u32 width,
       VkDescriptorImageInfo infos[5] = {
         {.imageView = g->atlas_texture->view,
          .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {.imageView = img ? img->texture->view : g->dummy->view,
+        {.imageView = img && img->texture ? img->texture->view : g->dummy->view,
          .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
         {.imageView = color_atlas->view,
          .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
@@ -555,8 +619,41 @@ void civue_gfx_encode(civue_gfx *g, void *cbp, void *target, u32 width,
   vkCmdEndRendering(cb);
 }
 
+static bool find_pixels(void *ctx, civue_texture t, civue_pixels *out) {
+  return civue_gfx_pixels(ctx, t, out);
+}
+
+// without a gpu the cpu draws the list, when it draws nothing the gpu alone
+// has.
+static bool snapshot_on_cpu(civue_gfx *g, const civue_draw_list *list,
+                            u32 width, u32 height, civue_color clear,
+                            civue_bytes *rgba) {
+  civue_raster_images images = {find_pixels, g};
+  civue_damage all = {.all = true};
+  u64 cost;
+  if (!civue_raster_cost(list, &all, width, height, &images, &cost)) {
+    return false;
+  }
+  usize len = (usize)width * height * 4;
+  rgba->len = 0;
+  vec_reserve(rgba, len);
+  rgba->len = len;
+  civue_surface s = {rgba->v, width, height, (usize)width * 4};
+  civue_raster(&s, list, clear, &all, &g->atlas, &g->color_atlas, &images);
+  // the cpu draws blue first.
+  for (usize i = 0; i < len; i += 4) {
+    u8 b = rgba->v[i];
+    rgba->v[i] = rgba->v[i + 2];
+    rgba->v[i + 2] = b;
+  }
+  return true;
+}
+
 bool civue_gfx_snapshot(civue_gfx *g, const civue_draw_list *list, u32 width,
                         u32 height, civue_color clear, civue_bytes *rgba) {
+  if (!ready(g)) {
+    return snapshot_on_cpu(g, list, width, height, clear, rgba);
+  }
   civue_vk_tex *target = civue_vk_tex_new(
     width, height, VK_FORMAT_R8G8B8A8_UNORM,
     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |

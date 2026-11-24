@@ -28,6 +28,23 @@ typedef struct {
   uint32_t hot_x, hot_y;
 } civue_cursor_image;
 
+// the layer of the compositor's layer shell a surface goes in on linux.
+typedef enum : uint8_t {
+  CIVUE_LAYER_NONE,
+  CIVUE_LAYER_BACKGROUND,
+  CIVUE_LAYER_BOTTOM,
+  CIVUE_LAYER_TOP,
+  CIVUE_LAYER_OVERLAY,
+} civue_layer;
+
+// the edges of the screen a layer surface is anchored to.
+enum : uint32_t {
+  CIVUE_EDGE_TOP = 1,
+  CIVUE_EDGE_BOTTOM = 2,
+  CIVUE_EDGE_LEFT = 4,
+  CIVUE_EDGE_RIGHT = 8,
+};
+
 typedef struct {
   const char *title;
   float width, height, min_width, min_height;
@@ -56,6 +73,14 @@ typedef struct {
                        civue_cursor_image *out);
   float cursor_points;
   uint32_t cursor_pixels;
+  // on linux, a surface of the layer shell instead of a window, like a bar or
+  // a dock, in `layer` and anchored to `edges`. a side anchored to both its
+  // edges stretches when its size is 0. `exclusive` points of the screen
+  // along its edge are kept from the windows, -1 to go over the other
+  // surfaces' zones. the title names it to the compositor.
+  civue_layer layer;
+  uint32_t edges;
+  int32_t exclusive;
 } civue_window_options;
 
 // opens a window and runs the app `make` returns in it until it closes, its ui
@@ -93,6 +118,18 @@ void civue_wait_while(bool (*waiting)(void *arg), void *arg);
 bool civue_window_maximized();
 // brings the window to the front, a second launch's link opened in it.
 void civue_window_raise();
+// whether a layer surface takes the keyboard: when it is clicked, or at once
+// and until told otherwise when `exclusive`. from the main thread.
+void civue_layer_keyboard(bool on, bool exclusive);
+// runs glib's default main context from civue's loop, for async gio calls and
+// d-bus signals. before civue_window_run.
+void civue_glib_drive();
+// sizes a layer surface again, 0 to stretch a side anchored to both its
+// edges. from the main thread.
+void civue_layer_resize(float width, float height);
+// where a layer surface takes the pointer, the rest passing through to what is
+// under it. every rect when `n` is 0. from the main thread.
+void civue_layer_input(const civue_rect *rects, int n);
 // calls `ready` on the main thread when `fd` can be read, to drive another
 // event loop from civue's, like the main queue of libdispatch. before
 // civue_window_run.

@@ -39,6 +39,15 @@ extern Wl civue__wl;
 // whether this is the process's first thread.
 bool civue__main_thread();
 
+// the id the desktop knows the app by. window.c.
+const char *civue__app_id();
+// runs glib's default loop within the window's from now on, for what is
+// built on it. window.c.
+void civue__glib_drive();
+// called with the number of each frame the window shows, for the webviews
+// to hide the ones it did not show. window.c.
+extern void (*civue__webviews_place)(u64 frame);
+
 // files dragged over the window, and dropped on it. window.c.
 void civue__drag_moved(civue_vec2 at);
 void civue__drag_left();

@@ -1,10 +1,12 @@
 #include "wl.h"
 
 #include <civue/gfx.h>
+#include <civue/raster.h>
 
 #include "fractional-scale-v1-client-protocol.h"
 #include "pointer-gestures-unstable-v1-client-protocol.h"
 #include "text-input-unstable-v3-client-protocol.h"
+#include "wlr-layer-shell-unstable-v1-client-protocol.h"
 #include "xdg-activation-v1-client-protocol.h"
 #include "xdg-decoration-unstable-v1-client-protocol.h"
 #include "xdg-foreign-unstable-v2-client-protocol.h"
@@ -26,6 +28,18 @@
 
 // frames worked on at once: the cpu builds one while the gpu draws the last.
 constexpr u32 FRAMES = 2;
+// a frame the cpu would take this many pixels' fill to draw goes to the gpu.
+constexpr u64 COSTLY = 32'000'000;
+// so do the frames of an animation that take more than this much of a
+// refresh, most of it drawing, from the third in a row.
+constexpr f64 TOO_LONG = 0.75;
+constexpr u32 IN_A_ROW = 3;
+// frames this far apart are not in a row.
+constexpr f64 APART = 0.05;
+// how long the swapchain stays once no frame needs the gpu, in seconds.
+constexpr f64 GPU_KEPT = 2.5;
+// how long a still window keeps the buffers it does not show.
+constexpr f64 KEPT_FOR = 2;
 // how near the edge of the window a press resizes it, in points.
 constexpr f32 EDGE = 5;
 
@@ -66,12 +80,27 @@ typedef struct {
   void *arg;
 } Watch;
 
-// an output's scale, for compositors that say nothing of the surface's.
+// an output's scale, for compositors that say nothing of the surface's, and
+// how many times a thousand seconds it refreshes.
 typedef struct {
   struct wl_output *output;
   i32 scale;
   bool on;
+  i32 refresh;
 } Output;
+
+// shared memory the cpu draws a frame into. the compositor reads it while
+// `busy`, and `missing` is what the frames since it was drawn changed.
+typedef struct {
+  struct wl_buffer *buffer;
+  u8 *pixels;
+  usize size;
+  u32 pw, ph;
+  // whether its alpha shows, for a window with round corners.
+  bool alpha;
+  bool busy;
+  civue_damage missing;
+} Buffer;
 
 // the one window and what drives it.
 static struct {
@@ -82,6 +111,8 @@ static struct {
   civue_gfx *gfx;
   // a frame is wanted, drawn once the events are in.
   bool wanted;
+  // the last frame showed nothing new, so no frame callback paces the next.
+  bool unchanged;
   // a frame asked for at this time, 0 for none.
   f64 timer_at;
   // when the last press happened, where and how many in a row.
@@ -97,6 +128,8 @@ static struct {
   struct xdg_wm_base *wm;
   struct xdg_surface *xdg;
   struct xdg_toplevel *toplevel;
+  struct zwlr_layer_shell_v1 *layer_shell;
+  struct zwlr_layer_surface_v1 *layer;
   struct zxdg_decoration_manager_v1 *decorations;
   struct zxdg_toplevel_decoration_v1 *decoration;
   struct wp_fractional_scale_manager_v1 *fractions;
@@ -166,6 +199,30 @@ static struct {
   bool tool_moved, tool_down, tool_up;
 
   // ---- drawing ----
+  // the cpu draws the frames it can into buffers of the window's own, the
+  // one shown and the ones it draws the next into. -1 when none is shown.
+  Buffer buffers[3];
+  int shown;
+  // which version of the compositor's interface was bound.
+  u32 compositor_version;
+  // when the frame being built began, and when one was last drawn.
+  f64 began, frame_at;
+  // the non shown buffers go at this time, 0 for never.
+  f64 trim_at;
+  // how many frames in a row the cpu took too long to draw, when the last
+  // did, and when a frame last needed the gpu.
+  u32 slow;
+  f64 slow_at, gpu_at;
+  // the vulkan surface and swapchain are there: the gpu draws the frames.
+  // they are made by the first frame that needs them and go GPU_KEPT after
+  // the last. `gpu_none` once vulkan could not be had.
+  bool gpu_on, gpu_none;
+  // whether the corners of the frame shown are cut.
+  bool rounded;
+  // how much of each pixel of the top left corner stays, `corner_cut` a
+  // side.
+  u8 *corner_keep;
+  u32 corner_cut;
   // the swapchain and its images, remade when `stale`.
   VkSurfaceKHR surface;
   VkSwapchainKHR swapchain;
@@ -193,6 +250,35 @@ static struct {
   u32 corner_pixels;
   civue_draw_list corners;
 
+  // ---- the overlays past the window ----
+  // the queue of the popups below, waited on in the middle of a frame.
+  struct wl_event_queue *queue;
+  struct wl_compositor *queued_compositor;
+  struct xdg_wm_base *queued_wm;
+  // the screen around the window in points, the window's top left at 0, 0.
+  // stale once the window may have moved, as wayland never says.
+  civue_rect screen;
+  bool screen_known, screen_stale;
+  // the last frame's overlays could go past the window.
+  bool outside_before;
+  // a popup over the screen the overlays are drawn in when they go past
+  // the window, `popup_screen` being where it was made.
+  struct wl_surface *popup_surface;
+  struct xdg_surface *popup_xdg;
+  struct xdg_popup *popup;
+  struct wp_viewport *popup_viewport;
+  civue_rect popup_screen;
+  bool popup_configured;
+  // the compositor took it away: the overlays stay in the window until they
+  // close.
+  bool popup_refused;
+  Buffer popup_buffers[2];
+  int popup_shown;
+  // what the popup's shown buffer holds, and where it takes the pointer.
+  civue_draw_list popup_list, popup_last;
+  civue_box popup_input;
+  bool pointer_on_popup, tool_on_popup;
+
   // ---- other threads ----
   pthread_mutex_t lock;
   Vec(Call *) calls;
@@ -203,11 +289,26 @@ static struct {
   char *layout_next;
 } W = {.lock = PTHREAD_MUTEX_INITIALIZER,
        .called = PTHREAD_COND_INITIALIZER,
-       .buffer_scale = 1};
+       .buffer_scale = 1,
+       .shown = -1,
+       .popup_shown = -1};
 
 // the app id the desktop file and the compositor know the window by.
 static const char *app_id() {
   return W.options.app_id ? W.options.app_id : "civue";
+}
+
+const char *civue__app_id() {
+  return app_id();
+}
+
+void (*civue__webviews_place)(u64 frame);
+
+// glib's default loop is run by civue's, once something built on it asks.
+static bool glib_driven;
+
+void civue__glib_drive() {
+  glib_driven = true;
 }
 
 bool civue__main_thread() {
@@ -222,7 +323,8 @@ static void want() {
   W.wanted = true;
 }
 
-void civue_window_buttons_hidden([[maybe_unused]] bool hidden) {}
+void civue_window_buttons_hidden([[maybe_unused]] bool hidden) {
+}
 
 void civue_window_wake() {
   woken = true;
@@ -471,6 +573,166 @@ static void make_swapchain() {
   W.stale = false;
 }
 
+// the vulkan surface of the window, made when a frame first needs the gpu.
+// false when there is no device to draw with.
+static bool gpu_start() {
+  if (W.gpu_on) {
+    return true;
+  }
+  if (W.gpu_none) {
+    return false;
+  }
+  const civue_vk_device *v = civue_vk();
+  if (!v || !v->swapchain ||
+      !civue_vk_has_instance_extension("VK_KHR_wayland_surface")) {
+    LOG("vulkan: no device to draw with, the cpu draws what it can");
+    W.gpu_none = true;
+    return false;
+  }
+  VkWaylandSurfaceCreateInfoKHR info = {
+    .sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR,
+    .display = WL.display,
+    .surface = WL.surface};
+  if (vkCreateWaylandSurfaceKHR(v->instance, &info, nullptr, &W.surface) !=
+      VK_SUCCESS) {
+    LOG("vulkan: no wayland surface, the cpu draws what it can");
+    W.gpu_none = true;
+    return false;
+  }
+  VkSemaphoreCreateInfo sem = {.sType =
+                                 VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+  for (u32 i = 0; i < FRAMES; i++) {
+    if (!W.acquired[i]) {
+      vkCreateSemaphore(v->device, &sem, nullptr, &W.acquired[i]);
+    }
+  }
+  W.gpu_on = true;
+  W.stale = true;
+  return true;
+}
+
+// gives the surface back to the cpu's buffers: what vulkan put on it goes
+// with its swapchain and its surface.
+static void gpu_stop() {
+  if (!W.gpu_on) {
+    return;
+  }
+  const civue_vk_device *v = civue_vk();
+  if (W.swapchain) {
+    drop_swapchain();
+    vkDestroySwapchainKHR(v->device, W.swapchain, nullptr);
+    W.swapchain = VK_NULL_HANDLE;
+  }
+  vkDestroySurfaceKHR(v->instance, W.surface, nullptr);
+  W.surface = VK_NULL_HANDLE;
+  W.format = 0;
+  W.gpu_on = false;
+}
+
+// ---- the cpu's buffers ----
+
+static void buffer_release(void *data, struct wl_buffer *b) {
+  ((Buffer *)data)->busy = false;
+}
+
+static const struct wl_buffer_listener buffer_listener = {.release =
+                                                            buffer_release};
+
+static void free_buffer_of(Buffer *b) {
+  if (b->buffer) {
+    wl_buffer_destroy(b->buffer);
+    munmap(b->pixels, b->size);
+  }
+  *b = (Buffer){};
+}
+
+static void drop_buffer(int i) {
+  free_buffer_of(&W.buffers[i]);
+  if (i == W.shown) {
+    W.shown = -1;
+  }
+}
+
+// frees the buffers but the one shown, or that one too.
+static void drop_buffers(bool shown_too) {
+  for (int i = 0; i < (int)countof(W.buffers); i++) {
+    if (shown_too || i != W.shown) {
+      drop_buffer(i);
+    }
+  }
+}
+
+static bool fits(const Buffer *b, u32 pw, u32 ph, bool alpha) {
+  return b->buffer && b->pw == pw && b->ph == ph && b->alpha == alpha;
+}
+
+static void make_buffer_of(Buffer *b, u32 pw, u32 ph, bool alpha) {
+  usize stride = (usize)pw * 4, size = stride * ph;
+  int fd = memfd_create("civue-frame", MFD_CLOEXEC);
+  if (fd < 0 || ftruncate(fd, (off_t)size) < 0) {
+    die("no memory for %u by %u pixels", pw, ph);
+  }
+  u8 *pixels = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  if (pixels == MAP_FAILED) {
+    die("no memory for %u by %u pixels", pw, ph);
+  }
+  struct wl_shm_pool *pool = wl_shm_create_pool(WL.shm, fd, (i32)size);
+  // the cpu draws blue first, premultiplied, as wayland's argb is in memory.
+  *b = (Buffer){.buffer = wl_shm_pool_create_buffer(
+                  pool, 0, (i32)pw, (i32)ph, (i32)stride,
+                  alpha ? WL_SHM_FORMAT_ARGB8888 : WL_SHM_FORMAT_XRGB8888),
+                .pixels = pixels,
+                .size = size,
+                .pw = pw,
+                .ph = ph,
+                .alpha = alpha,
+                .missing = {.all = true}};
+  wl_shm_pool_destroy(pool);
+  close(fd);
+  wl_buffer_add_listener(b->buffer, &buffer_listener, b);
+}
+
+static void make_buffer(int i, u32 pw, u32 ph, bool alpha) {
+  make_buffer_of(&W.buffers[i], pw, ph, alpha);
+}
+
+// a buffer to draw the next frame into. the one shown when the compositor
+// has copied it already, as most do: it is drawn over in place and one
+// buffer is enough. else one the compositor is done with, which gives its
+// place to a new one when there is no other.
+static int free_buffer(u32 pw, u32 ph, bool alpha) {
+  if (W.shown >= 0 && !W.buffers[W.shown].busy) {
+    return W.shown;
+  }
+  int empty = -1, busy = -1, found = -1;
+  for (int i = 0; i < (int)countof(W.buffers); i++) {
+    if (i == W.shown) {
+      continue;
+    }
+    if (!W.buffers[i].buffer) {
+      empty = i;
+    }
+    else if (W.buffers[i].busy) {
+      busy = i;
+    }
+    else if (found < 0) {
+      found = i;
+    }
+    else {
+      drop_buffer(i);
+    }
+  }
+  if (found >= 0) {
+    return found;
+  }
+  if (empty < 0) {
+    drop_buffer(busy);
+    empty = busy;
+  }
+  make_buffer(empty, pw, ph, alpha);
+  return empty;
+}
+
 // ---- the system's look ----
 
 static GDBusConnection *bus;
@@ -697,8 +959,28 @@ static void read_look() {
   pthread_detach(watcher);
 }
 
-// the corners' mask, black where the window is cut, its coverage outside a
-// circle of `pixels` around the corner, for the top left.
+// how much of each pixel of the top left corner stays once it is cut round,
+// `pixels` a side: all of it inside a circle of `pixels` around the corner's
+// far end.
+static void corner_table(u32 pixels) {
+  if (W.corner_keep && W.corner_cut == pixels) {
+    return;
+  }
+  free(W.corner_keep);
+  W.corner_keep = xmalloc((usize)pixels * pixels);
+  W.corner_cut = pixels;
+  f32 r = (f32)pixels;
+  for (u32 y = 0; y < pixels; y++) {
+    for (u32 x = 0; x < pixels; x++) {
+      f32 dx = r - (x + 0.5f), dy = r - (y + 0.5f);
+      f32 outside = fminf(fmaxf(sqrtf(dx * dx + dy * dy) - r + 0.5f, 0), 1);
+      W.corner_keep[(usize)y * pixels + x] = (u8)lroundf((1 - outside) * 255);
+    }
+  }
+}
+
+// the corners' mask for the gpu, black where the window is cut, its
+// coverage what the table takes away, for the top left.
 static void corner_mask(u32 pixels) {
   if (W.corner && W.corner_pixels == pixels) {
     return;
@@ -706,14 +988,10 @@ static void corner_mask(u32 pixels) {
   if (W.corner) {
     civue_gfx_free_texture(W.gfx, W.corner);
   }
+  corner_table(pixels);
   u8 *px = xcalloc((usize)pixels * pixels, 4);
-  f32 r = (f32)pixels;
-  for (u32 y = 0; y < pixels; y++) {
-    for (u32 x = 0; x < pixels; x++) {
-      f32 dx = r - (x + 0.5f), dy = r - (y + 0.5f);
-      f32 outside = fminf(fmaxf(sqrtf(dx * dx + dy * dy) - r + 0.5f, 0), 1);
-      px[((usize)y * pixels + x) * 4 + 3] = (u8)lroundf(outside * 255);
-    }
+  for (usize i = 0; i < (usize)pixels * pixels; i++) {
+    px[i * 4 + 3] = (u8)(255 - W.corner_keep[i]);
   }
   W.corner = civue_gfx_upload_image(W.gfx, pixels, pixels, px);
   W.corner_pixels = pixels;
@@ -772,6 +1050,9 @@ static bool on_title_bar(civue_vec2 at) {
 }
 
 static void toggle_maximized() {
+  if (!W.toplevel) {
+    return;
+  }
   if (W.maximized) {
     xdg_toplevel_unset_maximized(W.toplevel);
   }
@@ -811,6 +1092,21 @@ static bool frame_press(u32 button, civue_vec2 at, u32 clicks) {
 
 // ---- input ----
 
+// whether the pointer, or the stylus when it is near, is over the popup of
+// the overlays.
+static bool over_popup() {
+  return WL.tool ? W.tool_on_popup : W.pointer_on_popup;
+}
+
+// where a point of `s` is in the window's points.
+static civue_vec2 in_window(struct wl_surface *s, wl_fixed_t x, wl_fixed_t y) {
+  civue_vec2 at = v2((f32)wl_fixed_to_double(x), (f32)wl_fixed_to_double(y));
+  if (s && s == W.popup_surface) {
+    at = v2(at.x + (f32)W.popup_screen.x0, at.y + (f32)W.popup_screen.y0);
+  }
+  return at;
+}
+
 static void moved(civue_vec2 at, f32 pressure) {
   W.input.has_mouse = true;
   W.input.mouse = at;
@@ -837,7 +1133,11 @@ static void civue_button(u32 code, bool down) {
     W.click_at = t;
     W.click_pos = p;
   }
-  if (down && frame_press(code, p, i == 0 ? W.clicks : 1)) {
+  // the window may have moved since the screen was found.
+  if (down) {
+    W.screen_stale = true;
+  }
+  if (down && !over_popup() && frame_press(code, p, i == 0 ? W.clicks : 1)) {
     return;
   }
   // a release the app never saw pressed is the frame's.
@@ -895,7 +1195,9 @@ static void pointer_enter(void *data, struct wl_pointer *p, u32 serial,
   W.cursor_set = false;
   W.cursor_edge = 0;
   civue__cursors_entered();
-  W.pointer = v2((f32)wl_fixed_to_double(x), (f32)wl_fixed_to_double(y));
+  W.pointer_on_popup = s && s == W.popup_surface;
+  W.screen_stale |= !W.pointer_on_popup;
+  W.pointer = in_window(s, x, y);
   moved(W.pointer, -1);
 }
 
@@ -910,7 +1212,7 @@ static void pointer_leave(void *data, struct wl_pointer *p, u32 serial,
 
 static void pointer_motion(void *data, struct wl_pointer *p, u32 time,
                            wl_fixed_t x, wl_fixed_t y) {
-  W.pointer = v2((f32)wl_fixed_to_double(x), (f32)wl_fixed_to_double(y));
+  W.pointer = in_window(W.pointer_on_popup ? W.popup_surface : nullptr, x, y);
   moved(W.pointer, -1);
 }
 
@@ -1056,6 +1358,7 @@ static void tool_in(void *d, struct zwp_tablet_tool_v2 *t, u32 serial,
                     struct zwp_tablet_v2 *tablet, struct wl_surface *s) {
   WL.tool = t;
   WL.tool_serial = serial;
+  W.tool_on_popup = s && s == W.popup_surface;
   W.tool_pressure = 0;
   W.cursor_set = false;
   civue__cursors_entered();
@@ -1080,7 +1383,7 @@ static void tool_up(void *d, struct zwp_tablet_tool_v2 *t) {
 
 static void tool_motion(void *d, struct zwp_tablet_tool_v2 *t, wl_fixed_t x,
                         wl_fixed_t y) {
-  W.tool_at = v2((f32)wl_fixed_to_double(x), (f32)wl_fixed_to_double(y));
+  W.tool_at = in_window(W.tool_on_popup ? W.popup_surface : nullptr, x, y);
   W.tool_moved = true;
 }
 
@@ -1631,6 +1934,10 @@ static void output_geometry(void *d, struct wl_output *o, i32 x, i32 y, i32 w,
 
 static void output_mode(void *d, struct wl_output *o, u32 flags, i32 w, i32 h,
                         i32 refresh) {
+  Output *out = output_of(o);
+  if (out && flags & WL_OUTPUT_MODE_CURRENT) {
+    out->refresh = refresh;
+  }
 }
 
 static void output_done(void *d, struct wl_output *o) {
@@ -1800,6 +2107,7 @@ static void xdg_configure(void *data, struct xdg_surface *s, u32 serial) {
   if (w != W.width || h != W.height) {
     W.stale = true;
   }
+  W.screen_stale = true;
   W.width = w;
   W.height = h;
   W.maximized = W.next_maximized;
@@ -1821,6 +2129,94 @@ static void xdg_configure(void *data, struct xdg_surface *s, u32 serial) {
 
 static const struct xdg_surface_listener xdg_listener = {.configure =
                                                            xdg_configure};
+
+// ---- the layer surface ----
+
+static void layer_configure(void *data, struct zwlr_layer_surface_v1 *s,
+                            u32 serial, u32 w, u32 h) {
+  i32 width = w ? (i32)w : (i32)W.options.width;
+  i32 height = h ? (i32)h : (i32)W.options.height;
+  width = MAX(width, 1);
+  height = MAX(height, 1);
+  if (width != W.width || height != W.height) {
+    W.stale = true;
+  }
+  W.width = W.floating_w = width;
+  W.height = W.floating_h = height;
+  zwlr_layer_surface_v1_ack_configure(s, serial);
+  W.configured = true;
+  W.reconfigured = true;
+  want();
+}
+
+static void layer_closed(void *data, struct zwlr_layer_surface_v1 *s) {
+  exit(0);
+}
+
+static const struct zwlr_layer_surface_v1_listener layer_listener = {
+  .configure = layer_configure, .closed = layer_closed};
+
+static void layer_open(const civue_window_options *o) {
+  W.layer = zwlr_layer_shell_v1_get_layer_surface(
+    W.layer_shell, WL.surface, nullptr, (u32)o->layer - 1,
+    o->title ? o->title : app_id());
+  zwlr_layer_surface_v1_add_listener(W.layer, &layer_listener, nullptr);
+  zwlr_layer_surface_v1_set_size(W.layer, (u32)o->width, (u32)o->height);
+  zwlr_layer_surface_v1_set_anchor(W.layer, o->edges);
+  zwlr_layer_surface_v1_set_exclusive_zone(W.layer, o->exclusive);
+  zwlr_layer_surface_v1_set_keyboard_interactivity(
+    W.layer, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
+}
+
+void civue_layer_keyboard(bool on, bool exclusive) {
+  if (!W.layer) {
+    return;
+  }
+  u32 mode = !on        ? ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE
+             : exclusive ? ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE
+                         : ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND;
+  // on demand came with the shell's fourth version.
+  if (mode == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND &&
+      zwlr_layer_surface_v1_get_version(W.layer) < 4) {
+    mode = ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE;
+  }
+  zwlr_layer_surface_v1_set_keyboard_interactivity(W.layer, mode);
+  wl_surface_commit(WL.surface);
+}
+
+void civue_glib_drive() {
+  civue__glib_drive();
+}
+
+void civue_layer_resize(float width, float height) {
+  if (!W.layer) {
+    return;
+  }
+  zwlr_layer_surface_v1_set_size(W.layer, (u32)width, (u32)height);
+  W.options.width = width;
+  W.options.height = height;
+  wl_surface_commit(WL.surface);
+}
+
+void civue_layer_input(const civue_rect *rects, int n) {
+  if (!W.layer) {
+    return;
+  }
+  struct wl_region *region = nullptr;
+  if (n) {
+    region = wl_compositor_create_region(WL.compositor);
+    for (int i = 0; i < n; i++) {
+      civue_rect r = rects[i];
+      i32 x = (i32)floorf(r.x0), y = (i32)floorf(r.y0);
+      wl_region_add(region, x, y, (i32)ceilf(r.x1) - x, (i32)ceilf(r.y1) - y);
+    }
+  }
+  wl_surface_set_input_region(WL.surface, region);
+  if (region) {
+    wl_region_destroy(region);
+  }
+  wl_surface_commit(WL.surface);
+}
 
 static void decoration_mode(void *data, struct zxdg_toplevel_decoration_v1 *d,
                             u32 mode) {
@@ -1883,6 +2279,7 @@ static void global(void *data, struct wl_registry *r, u32 name,
                    const char *iface, u32 version) {
   if (!strcmp(iface, wl_compositor_interface.name)) {
     WL.compositor = bind(r, name, &wl_compositor_interface, version, 6);
+    W.compositor_version = MIN(version, 6u);
   }
   else if (!strcmp(iface, wl_shm_interface.name)) {
     WL.shm = bind(r, name, &wl_shm_interface, version, 1);
@@ -1903,6 +2300,9 @@ static void global(void *data, struct wl_registry *r, u32 name,
   else if (!strcmp(iface, xdg_wm_base_interface.name)) {
     W.wm = bind(r, name, &xdg_wm_base_interface, version, 6);
     xdg_wm_base_add_listener(W.wm, &wm_listener, nullptr);
+  }
+  else if (!strcmp(iface, zwlr_layer_shell_v1_interface.name)) {
+    W.layer_shell = bind(r, name, &zwlr_layer_shell_v1_interface, version, 4);
   }
   else if (!strcmp(iface, zxdg_decoration_manager_v1_interface.name)) {
     W.decorations =
@@ -1969,7 +2369,7 @@ static bool drawable() {
 // the cursor the pointer shows: a resize at the window's edges, the app's
 // elsewhere.
 static void update_cursor() {
-  u32 edge = W.input.has_mouse ? edge_at(W.input.mouse) : 0;
+  u32 edge = W.input.has_mouse && !over_popup() ? edge_at(W.input.mouse) : 0;
   if (edge) {
     if (W.cursor_edge != edge) {
       civue__cursors_set_edge(edge);
@@ -1989,13 +2389,180 @@ static void update_cursor() {
   civue__cursors_set(ui->cursor);
 }
 
-static void frame() {
-  W.wanted = false;
+// how long a frame may take: a part of the refresh of the fastest display
+// the window is on.
+static f64 time_allowed() {
+  i32 refresh = 0;
+  vec_each(&W.outputs, o) {
+    if (o->on) {
+      refresh = MAX(refresh, o->refresh);
+    }
+  }
+  return TOO_LONG * 1000 / (refresh > 0 ? refresh : 60'000);
+}
+
+static bool find_pixels(void *ctx, civue_texture t, civue_pixels *out) {
+  return civue_gfx_pixels(ctx, t, out);
+}
+
+// the images the cpu draws: the ones civue uploaded.
+static civue_raster_images images_of() {
+  return (civue_raster_images){find_pixels, W.gfx};
+}
+
+// what a commit of the surface carries besides its buffer: its scale, and
+// the callback that paces the next frame.
+static void surface_state() {
+  if (W.viewport) {
+    wp_viewport_set_destination(W.viewport, W.width, W.height);
+  }
+  else {
+    wl_surface_set_buffer_scale(WL.surface, W.buffer_scale);
+  }
+  if (!W.frame_cb) {
+    W.frame_cb = wl_surface_frame(WL.surface);
+    wl_callback_add_listener(W.frame_cb, &frame_listener, nullptr);
+  }
+  W.reconfigured = false;
+}
+
+// frees the buffers the window does not show once it stopped drawing.
+static void trim_buffers() {
+  f64 due = W.frame_at + KEPT_FOR;
+  if (now_s() < due) {
+    W.trim_at = due;
+    return;
+  }
+  W.trim_at = 0;
+  drop_buffers(false);
+}
+
+typedef struct {
+  Buffer *buffer;
+  u32 cut;
+} Corners;
+
+// cuts the corners of a box the cpu just drew: its pixels there are whole
+// again, and are taken away once.
+static void cut_box(void *ctx, civue_box b) {
+  Corners *c = ctx;
+  Buffer *buf = c->buffer;
+  i32 n = (i32)c->cut, pw = (i32)buf->pw, ph = (i32)buf->ph;
+  for (u32 corner = 0; corner < 4; corner++) {
+    bool right = corner & 1, bottom = corner & 2;
+    i32 cx = right ? pw - n : 0, cy = bottom ? ph - n : 0;
+    i32 x0 = MAX(b.x0, cx), x1 = MIN(b.x1, cx + n);
+    i32 y0 = MAX(b.y0, cy), y1 = MIN(b.y1, cy + n);
+    for (i32 y = y0; y < y1; y++) {
+      i32 ty = bottom ? n - 1 - (y - cy) : y - cy;
+      u8 *row = buf->pixels + (usize)y * buf->pw * 4;
+      for (i32 x = x0; x < x1; x++) {
+        i32 tx = right ? n - 1 - (x - cx) : x - cx;
+        u32 keep = W.corner_keep[(usize)ty * n + tx];
+        if (keep == 255) {
+          continue;
+        }
+        u8 *px = row + (usize)x * 4;
+        for (u32 k = 0; k < 4; k++) {
+          px[k] = (u8)((px[k] * keep + 127) / 255);
+        }
+      }
+    }
+  }
+}
+
+static void damage_box(void *ctx, civue_box b) {
+  wl_surface_damage_buffer(WL.surface, b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0);
+}
+
+// draws what changed on the cpu, into a buffer of the window's own.
+static void draw_on_cpu(const civue_draw_list *list, civue_color background,
+                        civue_damage changes, u32 pw, u32 ph, f32 scale,
+                        bool round) {
+  f64 drawing = now_s();
+  bool resized = W.reconfigured;
+  bool alpha = round || background.a < 1;
+  for (int i = 0; i < (int)countof(W.buffers); i++) {
+    if (W.buffers[i].buffer && !fits(&W.buffers[i], pw, ph, alpha)) {
+      drop_buffer(i);
+    }
+  }
+  int shown = W.shown;
+  int at = free_buffer(pw, ph, alpha);
+  Buffer *b = &W.buffers[at];
+
+  // what the buffer misses of the frames since it was drawn is drawn again
+  // with what changed, when that is not all of it.
+  civue_damage drawn = {.all = true};
+  if (shown >= 0 && !changes.all) {
+    if (at == shown) {
+      drawn = changes;
+    }
+    else if (b->missing.all) {
+      // a buffer that misses everything starts as the one shown.
+      memcpy(b->pixels, W.buffers[shown].pixels, b->size);
+      drawn = changes;
+    }
+    else {
+      drawn = b->missing;
+      civue_damage_join(&drawn, &changes);
+    }
+  }
+  else {
+    changes = (civue_damage){.all = true};
+  }
+
+  civue_surface pixels = {b->pixels, pw, ph, (usize)pw * 4};
+  civue_raster_images images = images_of();
+  civue_raster(&pixels, list, background, &drawn, civue_gfx_atlas(W.gfx),
+               civue_gfx_color_atlas(W.gfx), &images);
+  u32 cut = round ? (u32)lroundf(W.radius * scale) : 0;
+  if (cut && cut * 2 <= MIN(pw, ph)) {
+    corner_table(cut);
+    Corners corners = {b, cut};
+    civue_damage_each(&drawn, pw, ph, cut_box, &corners);
+  }
+
+  for (int i = 0; i < (int)countof(W.buffers); i++) {
+    if (W.buffers[i].buffer) {
+      civue_damage_join(&W.buffers[i].missing, &changes);
+    }
+  }
+  b->missing = (civue_damage){};
+  b->busy = true;
+  W.shown = at;
+
+  wl_surface_attach(WL.surface, b->buffer, 0, 0);
+  if (changes.all || W.compositor_version < 4) {
+    wl_surface_damage(WL.surface, 0, 0, INT32_MAX, INT32_MAX);
+  }
+  else {
+    civue_damage_each(&changes, pw, ph, damage_box, nullptr);
+  }
+  surface_state();
+  wl_surface_commit(WL.surface);
+
+  // an animation the cpu is too slow for is the gpu's: its frames come
+  // late, and the drawing is what takes the time. a resize's frames are
+  // drawn as its sizes come, late for none.
+  f64 now = now_s();
+  f64 whole = now - W.began;
+  if (resized || whole <= time_allowed() || (now - drawing) * 2 < whole) {
+    W.slow = 0;
+  }
+  else {
+    W.slow = now - W.slow_at < APART ? W.slow + 1 : 1;
+    W.slow_at = now;
+  }
+}
+
+// draws the whole frame on the gpu. false when the swapchain gave no image,
+// the frame is then built again.
+static bool draw_on_gpu(const civue_draw_list *list, civue_color background,
+                        u32 pw, u32 ph, f32 scale, bool round) {
   const civue_vk_device *v = civue_vk();
   // the frame that last used this slot's semaphore is done.
   civue_vk_wait(W.frame_value[W.frame]);
-  u32 pw, ph;
-  pixel_size(&pw, &ph);
   if (W.stale || !W.swapchain || W.extent.width != pw ||
       W.extent.height != ph) {
     make_swapchain();
@@ -2006,8 +2573,7 @@ static void frame() {
                           W.acquired[W.frame], VK_NULL_HANDLE, &image);
   if (r == VK_ERROR_OUT_OF_DATE_KHR) {
     W.stale = true;
-    want();
-    return;
+    return false;
   }
   if (r == VK_SUBOPTIMAL_KHR) {
     W.stale = true;
@@ -2017,8 +2583,441 @@ static void frame() {
   }
   civue_vk_tex *target = W.images[image];
   VkSemaphore acquired = W.acquired[W.frame];
+  // the mask uploads with the frame that first draws it.
+  round = round && W.translucent;
+  if (round) {
+    round_corners(target->width, target->height, scale);
+  }
+  VkCommandBuffer cb = civue_gfx_vk_begin(W.gfx);
+  civue_gfx_encode(W.gfx, cb, target, target->width, target->height, list,
+                   &background);
+  if (round) {
+    civue_gfx_vk_erase(W.gfx, cb, target, target->width, target->height,
+                       &W.corners);
+  }
+  civue_vk_layout(cb, target, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+  W.frame_value[W.frame] =
+    civue_gfx_vk_submit(W.gfx, cb, acquired, W.rendered[image]);
+  // the surface's scale and the next frame's callback come with the commit
+  // the present makes.
+  surface_state();
+  VkPresentInfoKHR present = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+                              .waitSemaphoreCount = 1,
+                              .pWaitSemaphores = &W.rendered[image],
+                              .swapchainCount = 1,
+                              .pSwapchains = &W.swapchain,
+                              .pImageIndices = &image};
+  r = civue_vk_present(&present);
+  if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) {
+    W.stale = true;
+  }
+  // the image is the presentation engine's until it is acquired again.
+  target->layout = VK_IMAGE_LAYOUT_UNDEFINED;
+  W.frame = (W.frame + 1) % FRAMES;
+  // the cpu's next frame is drawn anew.
+  drop_buffers(true);
+  return true;
+}
+
+// shows the frame the ui built: on the cpu when it can draw it and has the
+// time to, in memory the compositor reads. vulkan is only there for the
+// frames that need it, and for a while after.
+static void present(civue_color background, u32 pw, u32 ph, f32 scale) {
+  civue_damage changes;
+  const civue_draw_list *list =
+    civue_frame_changes(W.ui, background, pw, ph, &changes);
+  bool round =
+    W.custom_frame && W.radius > 0 && !W.maximized && !W.fullscreen && !W.tiled;
+  if (round != W.rounded) {
+    W.rounded = round;
+    changes = (civue_damage){.all = true};
+  }
+
+  // an image the app registered is the gpu's, and may have been drawn into
+  // since.
+  bool fixed = civue_gfx_static(W.gfx, list);
+  f64 now = now_s();
+  bool anew = changes.all || W.shown < 0 ||
+              !fits(&W.buffers[W.shown], pw, ph, round || background.a < 1);
+  bool needed = !fixed;
+  if (!needed) {
+    civue_damage all = {.all = true};
+    civue_raster_images images = images_of();
+    u64 cost;
+    // an animation the cpu was too slow for stays with the gpu until it
+    // stops.
+    needed =
+      !civue_raster_cost(list, anew ? &all : &changes, pw, ph, &images,
+                         &cost) ||
+      cost > COSTLY ||
+      (W.slow >= IN_A_ROW && now - (W.gpu_on ? W.gpu_at : W.slow_at) < APART);
+  }
+
+  // CIVUE_DRAW says who draws whatever the frame: gpu or cpu.
+  static const char *forced;
+  if (!forced) {
+    forced = getenv("CIVUE_DRAW");
+    forced = forced ? forced : "";
+  }
+  if (!strcmp(forced, "gpu")) {
+    needed = true;
+  }
+  else if (!strcmp(forced, "cpu")) {
+    needed = !fixed;
+  }
+
+  bool by_gpu = needed && gpu_start();
+  if (by_gpu) {
+    W.gpu_at = now;
+  }
+  else if (W.gpu_on) {
+    // the swapchain stays for the frames that follow one it was needed
+    // for, then the cpu takes the window back.
+    if (now - W.gpu_at < GPU_KEPT) {
+      by_gpu = true;
+    }
+    else {
+      gpu_stop();
+    }
+  }
+
+  // the window shows this frame already.
+  bool same =
+    by_gpu ? fixed && !changes.all && !changes.any : !anew && !changes.any;
+  W.unchanged = same;
+  if (same) {
+    if (W.reconfigured) {
+      W.reconfigured = false;
+      wl_surface_commit(WL.surface);
+    }
+  }
+  else if (by_gpu) {
+    if (!draw_on_gpu(list, background, pw, ph, scale, round)) {
+      civue_frame_forget(W.ui);
+      want();
+    }
+  }
+  else {
+    draw_on_cpu(list, background, changes, pw, ph, scale, round);
+    W.frame_at = now_s();
+    if (!W.trim_at) {
+      W.trim_at = W.frame_at + KEPT_FOR;
+    }
+  }
+
+  if (W.gpu_on) {
+    schedule_timer(W.gpu_at + GPU_KEPT);
+  }
+}
+
+// ---- the overlays past the window ----
+
+// a popup of the window, on the queue waited on while a frame is built.
+typedef struct {
+  struct wl_surface *surface;
+  struct xdg_surface *xdg;
+  struct xdg_popup *popup;
+} Popup;
+
+// a popup `w` by `h` points, its top left `x` and `y` from the window's.
+static struct xdg_positioner *positioner(i32 x, i32 y, i32 w, i32 h,
+                                         u32 adjust) {
+  struct xdg_positioner *p = xdg_wm_base_create_positioner(W.queued_wm);
+  xdg_positioner_set_size(p, w, h);
+  xdg_positioner_set_anchor_rect(p, 0, 0, 1, 1);
+  xdg_positioner_set_anchor(p, XDG_POSITIONER_ANCHOR_TOP_LEFT);
+  xdg_positioner_set_gravity(p, XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT);
+  xdg_positioner_set_offset(p, x, y);
+  xdg_positioner_set_constraint_adjustment(p, adjust);
+  return p;
+}
+
+static Popup popup_make(struct xdg_positioner *p,
+                        const struct xdg_surface_listener *surface,
+                        const struct xdg_popup_listener *popup, void *data) {
+  Popup made = {};
+  made.surface = wl_compositor_create_surface(W.queued_compositor);
+  made.xdg = xdg_wm_base_get_xdg_surface(W.queued_wm, made.surface);
+  xdg_surface_add_listener(made.xdg, surface, data);
+  made.popup = xdg_surface_get_popup(made.xdg, W.xdg, p);
+  xdg_popup_add_listener(made.popup, popup, data);
+  xdg_positioner_destroy(p);
+  return made;
+}
+
+static void popup_free(Popup *p) {
+  if (p->popup) {
+    xdg_popup_destroy(p->popup);
+  }
+  if (p->xdg) {
+    xdg_surface_destroy(p->xdg);
+  }
+  if (p->surface) {
+    wl_surface_destroy(p->surface);
+  }
+  *p = (Popup){};
+}
+
+typedef struct {
+  i32 x, y;
+  bool placed, configured;
+} Probe;
+
+static void probe_configure(void *data, struct xdg_surface *s, u32 serial) {
+  ((Probe *)data)->configured = true;
+}
+
+static void probe_placed(void *data, struct xdg_popup *p, i32 x, i32 y, i32 w,
+                         i32 h) {
+  Probe *probe = data;
+  probe->x = x;
+  probe->y = y;
+  probe->placed = true;
+}
+
+static void probe_done(void *data, struct xdg_popup *p) {
+}
+
+static void probe_repositioned(void *data, struct xdg_popup *p, u32 token) {
+}
+
+static const struct xdg_surface_listener probe_surface_listener = {
+  .configure = probe_configure};
+
+static const struct xdg_popup_listener probe_listener = {
+  .configure = probe_placed,
+  .popup_done = probe_done,
+  .repositioned = probe_repositioned};
+
+// finds where the screen is around the window. wayland never says, but a
+// popup asked for far past a corner of the screen is slid back onto it by
+// the compositor, to that very corner. they are never shown.
+static void probe_screen() {
+  constexpr i32 FAR = 1 << 15;
+  constexpr u32 SLIDE = XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_X |
+                        XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y;
+  Probe probes[2] = {};
+  Popup popups[2];
+  W.screen_stale = false;
+  for (u32 i = 0; i < 2; i++) {
+    i32 far = i ? FAR : -FAR;
+    popups[i] = popup_make(positioner(far, far, 1, 1, SLIDE),
+                           &probe_surface_listener, &probe_listener,
+                           &probes[i]);
+    wl_surface_commit(popups[i].surface);
+  }
+  wl_display_roundtrip_queue(WL.display, W.queue);
+  for (u32 i = 0; i < 2; i++) {
+    popup_free(&popups[i]);
+  }
+  // a compositor that slides nothing leaves them out there.
+  Probe a = probes[0], b = probes[1];
+  W.screen_known = a.placed && b.placed && abs(a.x) < FAR / 2 &&
+                   abs(a.y) < FAR / 2 && abs(b.x) < FAR / 2 &&
+                   abs(b.y) < FAR / 2 && a.x <= b.x && a.y <= b.y;
+  if (W.screen_known) {
+    W.screen = rect(a.x, a.y, b.x + 1, b.y + 1);
+  }
+}
+
+static void popup_configure(void *data, struct xdg_surface *s, u32 serial) {
+  xdg_surface_ack_configure(s, serial);
+  W.popup_configured = true;
+}
+
+static void popup_placed(void *data, struct xdg_popup *p, i32 x, i32 y, i32 w,
+                         i32 h) {
+}
+
+static void popup_dismissed(void *data, struct xdg_popup *p) {
+  W.popup_refused = true;
+  want();
+}
+
+static const struct xdg_surface_listener popup_surface_listener = {
+  .configure = popup_configure};
+
+static const struct xdg_popup_listener popup_listener = {
+  .configure = popup_placed,
+  .popup_done = popup_dismissed,
+  .repositioned = probe_repositioned};
+
+static void popup_close() {
+  if (!W.popup) {
+    return;
+  }
+  if (W.popup_viewport) {
+    wp_viewport_destroy(W.popup_viewport);
+  }
+  Popup p = {W.popup_surface, W.popup_xdg, W.popup};
+  popup_free(&p);
+  for (u32 i = 0; i < countof(W.popup_buffers); i++) {
+    free_buffer_of(&W.popup_buffers[i]);
+  }
+  civue_dl_clear(&W.popup_last);
+  W.popup_surface = nullptr;
+  W.popup_xdg = nullptr;
+  W.popup = nullptr;
+  W.popup_viewport = nullptr;
+  W.popup_configured = false;
+  W.popup_shown = -1;
+  W.popup_input = (civue_box){};
+  W.pointer_on_popup = W.tool_on_popup = false;
+}
+
+// the popup over the screen, made once the compositor configured it. false
+// when it would not.
+static bool popup_ready() {
+  civue_rect s = W.screen;
+  if (W.popup && memcmp(&W.popup_screen, &s, sizeof s)) {
+    popup_close();
+  }
+  if (W.popup) {
+    return W.popup_configured;
+  }
+  Popup p =
+    popup_make(positioner((i32)s.x0, (i32)s.y0, (i32)rect_w(s), (i32)rect_h(s),
+                          XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_NONE),
+               &popup_surface_listener, &popup_listener, nullptr);
+  W.popup_surface = p.surface;
+  W.popup_xdg = p.xdg;
+  W.popup = p.popup;
+  W.popup_screen = s;
+  if (W.scale120) {
+    W.popup_viewport = wp_viewporter_get_viewport(WL.viewporter, p.surface);
+  }
+  // it takes the pointer where the overlays are only, once drawn.
+  struct wl_region *none = wl_compositor_create_region(WL.compositor);
+  wl_surface_set_input_region(p.surface, none);
+  wl_region_destroy(none);
+  wl_surface_commit(p.surface);
+  wl_display_roundtrip_queue(WL.display, W.queue);
+  if (!W.popup_configured) {
+    popup_close();
+    W.popup_refused = true;
+  }
+  return W.popup_configured;
+}
+
+// the box of pixels around what `list` draws.
+static civue_box drawn_box(const civue_draw_list *list) {
+  f32 x0 = INFINITY, y0 = INFINITY, x1 = -INFINITY, y1 = -INFINITY;
+  vec_each(&list->quads, q) {
+    f32 l = fmaxf(q->rect[0], q->clip[0]), t = fmaxf(q->rect[1], q->clip[1]);
+    f32 r = fminf(q->rect[0] + q->rect[2], q->clip[2]);
+    f32 b = fminf(q->rect[1] + q->rect[3], q->clip[3]);
+    if (l < r && t < b) {
+      x0 = fminf(x0, l), y0 = fminf(y0, t);
+      x1 = fmaxf(x1, r), y1 = fmaxf(y1, b);
+    }
+  }
+  if (x0 >= x1) {
+    return (civue_box){};
+  }
+  return (civue_box){(i32)floorf(x0), (i32)floorf(y0), (i32)ceilf(x1),
+                     (i32)ceilf(y1)};
+}
+
+// whether the overlays draw past the window's `pw` by `ph` pixels.
+static bool overlays_past(const civue_ui *ui, u32 pw, u32 ph) {
+  civue_box b = drawn_box(&ui->overlay);
+  return b.x0 < b.x1 &&
+         (b.x0 < 0 || b.y0 < 0 || b.x1 > (i32)pw || b.y1 > (i32)ph);
+}
+
+static void popup_damage_box(void *ctx, civue_box b) {
+  wl_surface_damage_buffer(W.popup_surface, b.x0, b.y0, b.x1 - b.x0,
+                           b.y1 - b.y0);
+}
+
+// draws the overlays alone in the popup, on the cpu.
+static void draw_popup(f32 scale) {
+  civue_rect s = W.popup_screen;
+  i32 w = (i32)rect_w(s), h = (i32)rect_h(s);
+  u32 pw, ph;
+  if (W.scale120) {
+    pw = (u32)MAX(lround(w * W.scale120 / 120.0), 1);
+    ph = (u32)MAX(lround(h * W.scale120 / 120.0), 1);
+  }
+  else {
+    pw = (u32)MAX(w * W.buffer_scale, 1);
+    ph = (u32)MAX(h * W.buffer_scale, 1);
+  }
+  civue_dl_clear(&W.popup_list);
+  civue_dl_append(&W.popup_list, &W.ui->overlay);
+  civue_dl_shift(&W.popup_list, -roundf((f32)s.x0 * scale),
+                 -roundf((f32)s.y0 * scale));
+
+  // the buffer shown is drawn over in place once the compositor is done with
+  // it, the other one anew.
+  int at = W.popup_shown;
+  civue_damage drawn = {.all = true};
+  if (at >= 0 && !W.popup_buffers[at].busy &&
+      fits(&W.popup_buffers[at], pw, ph, true)) {
+    civue_damage_between(&W.popup_last, &W.popup_list, pw, ph, &drawn);
+  }
+  else {
+    at = at == 0 ? 1 : 0;
+    Buffer *b = &W.popup_buffers[at];
+    if (b->busy || !fits(b, pw, ph, true)) {
+      free_buffer_of(b);
+      make_buffer_of(b, pw, ph, true);
+    }
+  }
+
+  // in points, as the input region goes.
+  civue_box box = drawn_box(&W.popup_list);
+  civue_box input = {(i32)floorf((f32)box.x0 / scale),
+                     (i32)floorf((f32)box.y0 / scale),
+                     (i32)ceilf((f32)box.x1 / scale),
+                     (i32)ceilf((f32)box.y1 / scale)};
+  bool reshaped = memcmp(&input, &W.popup_input, sizeof input);
+
+  civue_draw_list swap = W.popup_last;
+  W.popup_last = W.popup_list;
+  W.popup_list = swap;
+  if (at == W.popup_shown && !drawn.all && !drawn.any && !reshaped) {
+    return;
+  }
+
+  Buffer *b = &W.popup_buffers[at];
+  civue_surface pixels = {b->pixels, pw, ph, (usize)pw * 4};
+  civue_raster_images images = images_of();
+  civue_raster(&pixels, &W.popup_last, (civue_color){}, &drawn,
+               civue_gfx_atlas(W.gfx), civue_gfx_color_atlas(W.gfx), &images);
+
+  if (reshaped) {
+    W.popup_input = input;
+    struct wl_region *region = wl_compositor_create_region(WL.compositor);
+    wl_region_add(region, input.x0, input.y0, input.x1 - input.x0,
+                  input.y1 - input.y0);
+    wl_surface_set_input_region(W.popup_surface, region);
+    wl_region_destroy(region);
+  }
+  wl_surface_attach(W.popup_surface, b->buffer, 0, 0);
+  if (drawn.all || at != W.popup_shown || W.compositor_version < 4) {
+    wl_surface_damage(W.popup_surface, 0, 0, INT32_MAX, INT32_MAX);
+  }
+  else {
+    civue_damage_each(&drawn, pw, ph, popup_damage_box, nullptr);
+  }
+  if (W.popup_viewport) {
+    wp_viewport_set_destination(W.popup_viewport, w, h);
+  }
+  else {
+    wl_surface_set_buffer_scale(W.popup_surface, W.buffer_scale);
+  }
+  wl_surface_commit(W.popup_surface);
+  b->busy = true;
+  W.popup_shown = at;
+}
+
+static void frame() {
+  W.wanted = false;
+  W.began = now_s();
+  u32 pw, ph;
+  pixel_size(&pw, &ph);
   f32 scale = scale_factor();
-  pw = target->width, ph = target->height;
   civue_ui *ui = W.ui;
   civue_color background = W.app_cb.background
                              ? W.app_cb.background(W.app_cb.ctx)
@@ -2033,6 +3032,14 @@ static void frame() {
   }
   ui->system_dark = W.dark;
   ui->window_focused = W.activated;
+  // overlays may go as far as the screen around a toplevel.
+  civue_rect window = rect(0, 0, pw / scale, ph / scale);
+  bool probed = W.xdg && W.screen_stale;
+  if (probed) {
+    probe_screen();
+  }
+  ui->screen_known = true;
+  ui->screen = W.xdg && W.screen_known ? W.screen : window;
   // what a pass asks of the window is asked once, the passes after it begin
   // without it and without the input that made it.
   bool maximize = false, minimize = false, closing = false, repaint = false;
@@ -2048,10 +3055,24 @@ static void frame() {
     if (ui->repaint_at && (!repaint_at || ui->repaint_at < repaint_at)) {
       repaint_at = ui->repaint_at;
     }
+    // overlays that just began to go past the window go by the screen found
+    // anew, the window may have moved since: hyprland, for one, says where
+    // it is in the middle of its opening animation.
+    if (W.xdg && !probed && ui->overlay_outside && !W.outside_before) {
+      civue_rect was = W.screen;
+      bool knew = W.screen_known;
+      probed = true;
+      probe_screen();
+      if (knew != W.screen_known || memcmp(&was, &W.screen, sizeof was)) {
+        ui->screen = W.screen_known ? W.screen : window;
+        continue;
+      }
+    }
     if (settled) {
       break;
     }
   }
+  W.outside_before = ui->overlay_outside;
 
   ui->toggle_maximize = maximize;
   ui->minimize_window = minimize;
@@ -2060,59 +3081,37 @@ static void frame() {
   ui->repaint_at = repaint_at;
   // a frame that never settled is shown as it is, the next one is new.
   ui->settled = true;
-  // the mask uploads with a submission of its own, before the frame's.
-  bool round = W.custom_frame && W.translucent && !W.maximized &&
-               !W.fullscreen && !W.tiled;
-  if (round) {
-    round_corners(pw, ph, scale);
+  // by the last pass alone, the one the window shows.
+  if (civue__webviews_place) {
+    civue__webviews_place(ui->frames);
   }
-  VkCommandBuffer cb = civue_gfx_vk_begin(W.gfx);
-  civue_gfx_encode(W.gfx, cb, target, pw, ph, civue_frame_list(ui),
-                   &background);
-  if (round) {
-    civue_gfx_vk_erase(W.gfx, cb, target, pw, ph, &W.corners);
+  // the frame is shown without its overlays when they go past it: they
+  // have a popup of their own.
+  bool past = W.xdg && W.screen_known && ui->overlay_outside &&
+              overlays_past(ui, pw, ph);
+  if (!past) {
+    W.popup_refused = false;
   }
-  civue_vk_layout(cb, target, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
-  W.frame_value[W.frame] =
-    civue_gfx_vk_submit(W.gfx, cb, acquired, W.rendered[image]);
-  // the surface's scale and the next frame's callback come with the commit
-  // the present makes.
-  if (W.viewport) {
-    wp_viewport_set_destination(W.viewport, W.width, W.height);
+  ui->overlay_apart = past && !W.popup_refused && popup_ready();
+  present(background, pw, ph, scale);
+  if (ui->overlay_apart) {
+    draw_popup(scale);
   }
   else {
-    wl_surface_set_buffer_scale(WL.surface, W.buffer_scale);
+    popup_close();
   }
-  if (!W.frame_cb) {
-    W.frame_cb = wl_surface_frame(WL.surface);
-    wl_callback_add_listener(W.frame_cb, &frame_listener, nullptr);
-  }
-  W.reconfigured = false;
-  VkPresentInfoKHR present = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-                              .waitSemaphoreCount = 1,
-                              .pWaitSemaphores = &W.rendered[image],
-                              .swapchainCount = 1,
-                              .pSwapchains = &W.swapchain,
-                              .pImageIndices = &image};
-  r = civue_vk_present(&present);
-  if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) {
-    W.stale = true;
-  }
-  // the image is the presentation engine's until it is acquired again.
-  target->layout = VK_IMAGE_LAYOUT_UNDEFINED;
-  W.frame = (W.frame + 1) % FRAMES;
   update_cursor();
   set_secure(ui->secure_input);
   if (ui->toggle_maximize && !W.fullscreen) {
     toggle_maximized();
   }
-  if (ui->minimize_window) {
+  if (ui->minimize_window && W.toplevel) {
     xdg_toplevel_set_minimized(W.toplevel);
   }
   if (ui->close_window) {
     exit(0);
   }
-  if (ui->toggle_fullscreen) {
+  if (ui->toggle_fullscreen && W.toplevel) {
     ui->toggle_fullscreen = false;
     if (W.fullscreen) {
       xdg_toplevel_unset_fullscreen(W.toplevel);
@@ -2121,7 +3120,13 @@ static void frame() {
       xdg_toplevel_set_fullscreen(W.toplevel, nullptr);
     }
   }
-  if (ui->repaint) {
+  // a frame asked again after one that changed nothing waits a display
+  // frame's time, the compositor's callback that paces the others never
+  // comes for it.
+  if (ui->repaint && W.unchanged) {
+    schedule_timer(now_s() + 1.0 / 60);
+  }
+  else if (ui->repaint) {
     want();
   }
   if (ui->repaint_at) {
@@ -2149,14 +3154,31 @@ static void pump(i32 ms) {
     struct pollfd out = {wl_display_get_fd(d), POLLOUT, 0};
     poll(&out, 1, -1);
   }
-  constexpr u32 MOST = 8;
-  struct pollfd p[2 + MOST] = {{wl_display_get_fd(d), POLLIN, 0},
-                               {wake_fd, POLLIN, 0}};
+  constexpr u32 MOST = 8, GLIB_MOST = 64;
+  struct pollfd p[2 + MOST + GLIB_MOST] = {{wl_display_get_fd(d), POLLIN, 0},
+                                           {wake_fd, POLLIN, 0}};
   u32 nwatch = MIN(W.watches.len, MOST);
   for (u32 i = 0; i < nwatch; i++) {
     p[2 + i] = (struct pollfd){W.watches.v[i].fd, POLLIN, 0};
   }
-  int n = poll(p, 2 + nwatch, ms);
+  // glib's sources wait with the rest: its descriptors are polled here, a
+  // GPollFD being a pollfd, and the wait is no longer than its timers.
+  GMainContext *glib = glib_driven ? g_main_context_default() : nullptr;
+  GPollFD *gfds = (GPollFD *)(p + 2 + nwatch);
+  int nglib = 0, priority = 0;
+  if (glib && g_main_context_acquire(glib)) {
+    int timeout = -1;
+    g_main_context_prepare(glib, &priority);
+    nglib = g_main_context_query(glib, priority, &timeout, gfds, GLIB_MOST);
+    nglib = MIN(nglib, (int)GLIB_MOST);
+    if (timeout >= 0 && (ms < 0 || timeout < ms)) {
+      ms = timeout;
+    }
+  }
+  else {
+    glib = nullptr;
+  }
+  int n = poll(p, 2 + nwatch + (u32)nglib, ms);
   if (n > 0 && p[0].revents & POLLIN) {
     if (wl_display_read_events(d) < 0) {
       die("wayland: the compositor left");
@@ -2168,7 +3190,8 @@ static void pump(i32 ms) {
   if (p[0].revents & (POLLERR | POLLHUP)) {
     die("wayland: the compositor left");
   }
-  if (wl_display_dispatch_pending(d) < 0) {
+  if (wl_display_dispatch_pending(d) < 0 ||
+      (W.queue && wl_display_dispatch_queue_pending(d, W.queue) < 0)) {
     die("wayland: the compositor left");
   }
   if (n > 0 && p[1].revents & POLLIN) {
@@ -2183,6 +3206,12 @@ static void pump(i32 ms) {
     if (p[2 + i].revents & POLLIN) {
       W.watches.v[i].ready(W.watches.v[i].arg);
     }
+  }
+  if (glib) {
+    if (g_main_context_check(glib, priority, gfds, nglib)) {
+      g_main_context_dispatch(glib);
+    }
+    g_main_context_release(glib);
   }
 }
 
@@ -2208,6 +3237,9 @@ static i32 next_wait() {
   f64 next = W.wanted && drawable() ? now_s() : W.timer_at;
   if (W.repeat_key && (!next || W.repeat_at < next)) {
     next = W.repeat_at;
+  }
+  if (W.trim_at && (!next || W.trim_at < next)) {
+    next = W.trim_at;
   }
   if (!next) {
     return -1;
@@ -2246,17 +3278,14 @@ void civue_window_run_sized(const civue_window_options *o,
   struct wl_registry *registry = wl_display_get_registry(WL.display);
   wl_registry_add_listener(registry, &registry_listener, nullptr);
   wl_display_roundtrip(WL.display);
-  if (!WL.compositor || !W.wm || !WL.shm) {
-    die("wayland: the compositor has no xdg shell");
+  if (!WL.compositor || !WL.shm || (o->layer ? !W.layer_shell : !W.wm)) {
+    die(o->layer ? "wayland: the compositor has no layer shell"
+                 : "wayland: the compositor has no xdg shell");
   }
   // the seat's devices, the outputs' scales.
   wl_display_roundtrip(WL.display);
   if (o->title) {
     civue__gpu_title(o->title);
-  }
-  const civue_vk_device *v = civue_vk();
-  if (!v || !civue_vk_has_instance_extension("VK_KHR_wayland_surface")) {
-    die("vulkan: no device to draw with");
   }
   W.custom_frame = o->titlebar > 0;
   read_look();
@@ -2270,14 +3299,27 @@ void civue_window_run_sized(const civue_window_options *o,
                                         nullptr);
     W.viewport = wp_viewporter_get_viewport(WL.viewporter, WL.surface);
   }
-  W.xdg = xdg_wm_base_get_xdg_surface(W.wm, WL.surface);
-  xdg_surface_add_listener(W.xdg, &xdg_listener, nullptr);
-  W.toplevel = xdg_surface_get_toplevel(W.xdg);
-  xdg_toplevel_add_listener(W.toplevel, &toplevel_listener, nullptr);
-  xdg_toplevel_set_title(W.toplevel, o->title);
-  xdg_toplevel_set_app_id(W.toplevel, app_id());
-  xdg_toplevel_set_min_size(W.toplevel, (i32)o->min_width, (i32)o->min_height);
-  if (W.decorations) {
+  if (o->layer) {
+    layer_open(o);
+  }
+  else {
+    W.xdg = xdg_wm_base_get_xdg_surface(W.wm, WL.surface);
+    xdg_surface_add_listener(W.xdg, &xdg_listener, nullptr);
+    W.toplevel = xdg_surface_get_toplevel(W.xdg);
+    xdg_toplevel_add_listener(W.toplevel, &toplevel_listener, nullptr);
+    xdg_toplevel_set_title(W.toplevel, o->title);
+    xdg_toplevel_set_app_id(W.toplevel, app_id());
+    xdg_toplevel_set_min_size(W.toplevel, (i32)o->min_width,
+                              (i32)o->min_height);
+  }
+  if (W.xdg) {
+    W.queue = wl_display_create_queue(WL.display);
+    W.queued_compositor = wl_proxy_create_wrapper(WL.compositor);
+    wl_proxy_set_queue((struct wl_proxy *)W.queued_compositor, W.queue);
+    W.queued_wm = wl_proxy_create_wrapper(W.wm);
+    wl_proxy_set_queue((struct wl_proxy *)W.queued_wm, W.queue);
+  }
+  if (W.decorations && W.toplevel) {
     W.decoration = zxdg_decoration_manager_v1_get_toplevel_decoration(
       W.decorations, W.toplevel);
     zxdg_toplevel_decoration_v1_add_listener(W.decoration, &decoration_listener,
@@ -2308,20 +3350,6 @@ void civue_window_run_sized(const civue_window_options *o,
     free(layout);
   }
 
-  VkWaylandSurfaceCreateInfoKHR info = {
-    .sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR,
-    .display = WL.display,
-    .surface = WL.surface};
-  if (vkCreateWaylandSurfaceKHR(v->instance, &info, nullptr, &W.surface) !=
-      VK_SUCCESS) {
-    die("vulkan: no wayland surface");
-  }
-  VkSemaphoreCreateInfo sem = {.sType =
-                                 VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-  for (u32 i = 0; i < FRAMES; i++) {
-    vkCreateSemaphore(v->device, &sem, nullptr, &W.acquired[i]);
-  }
-
   if (WL.seat) {
     civue__clipboard_seat();
     if (W.tablets) {
@@ -2335,7 +3363,7 @@ void civue_window_run_sized(const civue_window_options *o,
       zwp_text_input_v3_add_listener(W.text_input, &text_listener, nullptr);
     }
   }
-  if (W.exporter) {
+  if (W.exporter && W.toplevel) {
     W.exported = zxdg_exporter_v2_export_toplevel(W.exporter, WL.surface);
     zxdg_exported_v2_add_listener(W.exported, &exported_listener, nullptr);
   }
@@ -2349,7 +3377,8 @@ void civue_window_run_sized(const civue_window_options *o,
   if (o->install_menus) {
     o->install_menus();
   }
-  W.gfx = civue_gfx_new((void *)v);
+  // without vulkan yet: its device is made by the first frame the gpu draws.
+  W.gfx = civue_gfx_new(nullptr);
   W.ui = civue_ui_new_sized(W.gfx, scale_factor(), ui_size);
   if (o->icons) {
     civue_icons_use(W.ui->icons, o->icons, o->nicons);
@@ -2375,6 +3404,9 @@ void civue_window_run_sized(const civue_window_options *o,
     if (W.timer_at && now_s() >= W.timer_at) {
       W.timer_at = 0;
       want();
+    }
+    if (W.trim_at && now_s() >= W.trim_at) {
+      trim_buffers();
     }
     if (W.wanted && drawable()) {
       place_candidates();

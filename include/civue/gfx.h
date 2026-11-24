@@ -20,6 +20,8 @@ typedef struct civue_gfx civue_gfx;
 
 // a renderer on `device`, a device the app made or nullptr for the process's:
 // id<MTLDevice> on macos, the const civue_vk_device * of civue_vk on linux.
+// on linux the device is made by the first call that needs the gpu, so a
+// renderer the cpu draws for alone never loads a driver.
 civue_gfx *civue_gfx_new(void *device);
 // frees the renderer. on macos the command buffers it encoded may still be
 // with the gpu: they keep what they read, and freeing waits up to a second
