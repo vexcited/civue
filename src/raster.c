@@ -299,7 +299,7 @@ static bool same_batches(const civue_draw_list *a, const civue_draw_list *b) {
     const civue_batch *x = &a->batches.v[i], *y = &b->batches.v[i];
 
     if (x->start != y->start || x->texture != y->texture ||
-        x->multiply != y->multiply) {
+        x->multiply != y->multiply || x->erase != y->erase) {
       return false;
     }
   }
@@ -335,7 +335,8 @@ static bool same_drawn(const civue_draw_list *a, u32 i,
 
   const civue_batch *x = batch_at(a, i), *y = batch_at(b, j);
 
-  return x->texture == y->texture && x->multiply == y->multiply;
+  return x->texture == y->texture && x->multiply == y->multiply &&
+         x->erase == y->erase;
 }
 
 // past this many changed quads the whole window is drawn again: telling
@@ -620,7 +621,8 @@ typedef struct {
   const u8 *mask, *color;
   // what is drawn now.
   civue_box box;
-  bool multiply;
+  // how the batch drawn now blends, BLEND_OVER for most.
+  u8 blending;
   // the pixel of the color under everything.
   u32 clear;
   // where images are found, and the one the batch drawn now shows.
@@ -853,10 +855,23 @@ static u8 byte(f32 v) {
 }
 
 // a premultiplied color over a pixel, as the gpu blends it.
-static void blend(u8 *d, const f32 c[4], bool multiply) {
+enum : u8 { BLEND_OVER, BLEND_MULTIPLY, BLEND_ERASE };
+
+static u8 blending_of(const civue_batch *b) {
+  return b->erase ? BLEND_ERASE : b->multiply ? BLEND_MULTIPLY : BLEND_OVER;
+}
+
+static void blend(u8 *d, const f32 c[4], u8 blending) {
   f32 inv = 1 - c[3];
 
-  if (multiply) {
+  if (blending == BLEND_ERASE) {
+    for (u32 k = 0; k < 4; k++) {
+      d[k] = byte(d[k] * inv);
+    }
+
+    return;
+  }
+  else if (blending == BLEND_MULTIPLY) {
     d[0] = byte(d[0] * (c[2] + inv));
     d[1] = byte(d[1] * (c[1] + inv));
     d[2] = byte(d[2] * (c[0] + inv));
@@ -921,9 +936,9 @@ static void span(const Raster *r, i32 y, i32 x0, i32 x1, const f32 c[4]) {
   u8 *d = pixel(r->s, x0, y);
   u32 n = (u32)(x1 - x0);
 
-  if (r->multiply) {
+  if (r->blending) {
     for (u32 i = 0; i < n; i++) {
-      blend(d + i * 4, c, true);
+      blend(d + i * 4, c, r->blending);
     }
 
     return;
@@ -986,7 +1001,7 @@ static void each(const Raster *r, const civue_quad *q, civue_box b) {
       f32 c[4];
 
       if (shade(r, q, (f32)x + 0.5f, (f32)y + 0.5f, c)) {
-        blend(d, c, r->multiply);
+        blend(d, c, r->blending);
       }
     }
   }
@@ -1013,7 +1028,7 @@ static void each_turned(const Raster *r, const civue_quad *q) {
       }
 
       if (shade(r, q, lx, ly, color)) {
-        blend(d, color, r->multiply);
+        blend(d, color, r->blending);
       }
     }
   }
@@ -1270,7 +1285,7 @@ static void rect_run(const Raster *r, const civue_quad *q, const void *shape,
   for (; x < x1; x++, d += 4) {
     f32 c[4];
     shade_rect(q, (f32)x + 0.5f, (f32)y + 0.5f, c);
-    blend(d, c, r->multiply);
+    blend(d, c, r->blending);
   }
 }
 
@@ -1283,7 +1298,7 @@ static void rect_quad(const Raster *r, const civue_quad *q, civue_box b) {
   RectShape shape;
   const void *vector = nullptr;
 
-  if (q->params[2] <= 0.5f && !r->multiply) {
+  if (q->params[2] <= 0.5f && !r->blending) {
     shape = rect_shape(q);
     vector = &shape;
   }
@@ -1500,7 +1515,7 @@ static void mask_pixel(u8 *p, u32 a, const u8 c[4]) {
 static void mask_quad(const Raster *r, const civue_quad *q, civue_box b) {
   i32 u, v;
 
-  if (!r->mask || r->multiply || !one_to_one(q, &u, &v)) {
+  if (!r->mask || r->blending || !one_to_one(q, &u, &v)) {
     each(r, q, b);
     return;
   }
@@ -1557,7 +1572,7 @@ static void mask_quad(const Raster *r, const civue_quad *q, civue_box b) {
 static void color_quad(const Raster *r, const civue_quad *q, civue_box b) {
   i32 u, v;
 
-  if (!r->color || r->multiply || !one_to_one(q, &u, &v)) {
+  if (!r->color || r->blending || !one_to_one(q, &u, &v)) {
     each(r, q, b);
     return;
   }
@@ -1716,7 +1731,7 @@ static void shadow_quad(const Raster *r, const civue_quad *q, civue_box b) {
       f32 v = kept ? falloff[n++] * total : soft_at(&row, (f32)x + 0.5f);
 
       scaled(q->color, v, c);
-      blend(d, c, r->multiply);
+      blend(d, c, r->blending);
     }
 
     if (a < e) {
@@ -1733,7 +1748,7 @@ static void shadow_quad(const Raster *r, const civue_quad *q, civue_box b) {
       f32 v = kept ? falloff[n++] * total : soft_at(&row, (f32)x + 0.5f);
 
       scaled(q->color, v, c);
-      blend(d, c, r->multiply);
+      blend(d, c, r->blending);
     }
   }
 }
@@ -1936,7 +1951,7 @@ static void image_rim(const Raster *r, const civue_quad *q, const u8 *row,
       scaled(c, cover, c);
     }
 
-    blend(d, c, r->multiply);
+    blend(d, c, r->blending);
   }
 }
 
@@ -2003,7 +2018,7 @@ static void image_scaled(const Raster *r, const civue_quad *q, civue_box b) {
         scaled(c, clamp01(0.5f - sd_rounded(px, py, hx, hy, q->radii)), c);
       }
 
-      blend(d, c, r->multiply);
+      blend(d, c, r->blending);
     }
   }
 }
@@ -2025,7 +2040,7 @@ static void image_quad(const Raster *r, const civue_quad *q, civue_box b) {
 
   const civue_pixels *im = &r->image;
   f32 alpha = q->color[3];
-  bool copy = !r->multiply && alpha >= 1;
+  bool copy = !r->blending && alpha >= 1;
 
   for (i32 y = b.y0; y < b.y1; y++) {
     i32 a = b.x0, e = b.x1;
@@ -2078,7 +2093,7 @@ static void image_quad(const Raster *r, const civue_quad *q, civue_box b) {
       f32 c[4] = {t[0] / 255.0f, t[1] / 255.0f, t[2] / 255.0f, t[3] / 255.0f};
 
       scaled(c, alpha, c);
-      blend(d, c, r->multiply);
+      blend(d, c, r->blending);
     }
 
     image_rim(r, q, row, ox, y, MAX(e, b.x0), b.x1);
@@ -2185,7 +2200,7 @@ static void uncovered(const Raster *r, const civue_draw_list *list,
 
     batch = batch_of(list, i, batch);
 
-    if (list->batches.v[batch].multiply) {
+    if (blending_of(&list->batches.v[batch])) {
       continue;
     }
 
@@ -2310,7 +2325,7 @@ static void draw_box(Raster *r, const civue_draw_list *list, civue_box box) {
   }
 
   r->box = box;
-  r->multiply = false;
+  r->blending = BLEND_OVER;
 
   // nothing under the last quad that hides the whole box needs drawing.
   u32 n = list->quads.len, first = 0;
@@ -2322,7 +2337,7 @@ static void draw_box(Raster *r, const civue_draw_list *list, civue_box box) {
       batch--;
     }
 
-    if (!list->batches.v[batch].multiply && hides(&list->quads.v[i], box)) {
+    if (!blending_of(&list->batches.v[batch]) && hides(&list->quads.v[i], box)) {
       first = i;
       hidden = true;
     }
@@ -2344,7 +2359,7 @@ static void draw_box(Raster *r, const civue_draw_list *list, civue_box box) {
   for (u32 i = first + 1; i < n && ncovers < COVERS; i++) {
     batch = batch_of(list, i, batch);
 
-    if (!list->batches.v[batch].multiply) {
+    if (!blending_of(&list->batches.v[batch])) {
       civue_box c = covered(&list->quads.v[i], box);
 
       if (area(c) >= COVER_AREA) {
@@ -2357,7 +2372,7 @@ static void draw_box(Raster *r, const civue_draw_list *list, civue_box box) {
 
   for (u32 i = first, next = 0; i < n; i++) {
     batch = batch_of(list, i, batch);
-    r->multiply = list->batches.v[batch].multiply;
+    r->blending = blending_of(&list->batches.v[batch]);
     use_texture(r, list->batches.v[batch].texture);
 
     while (next < ncovers && covers[next].at <= i) {
@@ -2413,7 +2428,7 @@ static void draw_tiles(Raster *r, const civue_draw_list *list,
     }
 
     batch = batch_of(list, i, batch);
-    r->multiply = list->batches.v[batch].multiply;
+    r->blending = blending_of(&list->batches.v[batch]);
     use_texture(r, list->batches.v[batch].texture);
 
     if (whole) {

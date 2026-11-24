@@ -10,6 +10,7 @@ void civue_dl_clear(civue_draw_list *d) {
   d->clips.len = 0;
   d->rounds.len = 0;
   d->multiply = false;
+  d->erase = false;
   memset(d->turn, 0, sizeof d->turn);
   d->keep_hidden = false;
   d->cuts = 0;
@@ -95,6 +96,15 @@ void civue_dl_set_multiply(civue_draw_list *d, bool on) {
   d->multiply = on;
 }
 
+void civue_dl_set_erase(civue_draw_list *d, bool on) {
+  d->erase = on;
+}
+
+// whether the last batch blends the way the list does now.
+static bool same_blend(const civue_batch *b, const civue_draw_list *d) {
+  return b->multiply == d->multiply && b->erase == d->erase;
+}
+
 static void premul(civue_color c, f32 out[4]) {
   out[0] = c.r * c.a, out[1] = c.g * c.a, out[2] = c.b * c.a, out[3] = c.a;
 }
@@ -121,8 +131,9 @@ static void push(civue_draw_list *d, civue_quad q, civue_texture texture) {
   }
   civue_batch *last = d->batches.len ? &vec_last(&d->batches) : nullptr;
   if (!last || (texture && last->texture != texture) ||
-      last->multiply != d->multiply) {
-    vec_push(&d->batches, ((civue_batch){d->quads.len, texture, d->multiply}));
+      !same_blend(last, d)) {
+    vec_push(&d->batches, ((civue_batch){d->quads.len, texture, d->multiply,
+                                         d->erase}));
   }
   else if (!last->texture) {
     last->texture = texture;
@@ -144,8 +155,9 @@ void civue_dl_replay(civue_draw_list *d, const civue_quad *quads, u32 count,
                !memcmp(&round, round_was, sizeof round);
 
   civue_batch *last = d->batches.len ? &vec_last(&d->batches) : nullptr;
-  if (!last || last->multiply != d->multiply) {
-    vec_push(&d->batches, ((civue_batch){d->quads.len, 0, d->multiply}));
+  if (!last || !same_blend(last, d)) {
+    vec_push(&d->batches,
+             ((civue_batch){d->quads.len, 0, d->multiply, d->erase}));
   }
 
   vec_reserve(&d->quads, count);
@@ -272,7 +284,7 @@ void civue_dl_masks(civue_draw_list *d, const civue_glyph_quad *quads,
   bool all = d->keep_hidden || d->turn[0] != 0 || d->turn[1] != 0;
 
   civue_batch *last = d->batches.len ? &vec_last(&d->batches) : nullptr;
-  bool begun = !last || last->multiply != d->multiply;
+  bool begun = !last || !same_blend(last, d);
   u32 start = d->quads.len;
   vec_reserve(&d->quads, count);
   civue_quad *out = d->quads.v + d->quads.len;
@@ -292,7 +304,7 @@ void civue_dl_masks(civue_draw_list *d, const civue_glyph_quad *quads,
 
   d->quads.len = (u32)(out - d->quads.v);
   if (begun && d->quads.len > start) {
-    vec_push(&d->batches, ((civue_batch){start, 0, d->multiply}));
+    vec_push(&d->batches, ((civue_batch){start, 0, d->multiply, d->erase}));
   }
 }
 

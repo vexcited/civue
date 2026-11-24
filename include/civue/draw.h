@@ -78,6 +78,8 @@ typedef struct {
   // 0 for none.
   civue_texture texture;
   bool multiply;
+  // what it covers is taken away, alpha too, by its coverage.
+  bool erase;
 } civue_batch;
 
 typedef struct {
@@ -87,6 +89,8 @@ typedef struct {
   CIVUE_VEC(civue_round) rounds;
   // what is pushed multiplies what is under it, like a highlighter.
   bool multiply;
+  // what is pushed takes away what is under it, leaving it see through.
+  bool erase;
   float turn[4];
   // quads the clip hides are kept, for what is recorded to be drawn again
   // somewhere else.
@@ -123,6 +127,9 @@ void civue_dl_pop_round(civue_draw_list *d);
 // stops turning.
 void civue_dl_set_turn(civue_draw_list *d, float angle, civue_vec2 pivot);
 void civue_dl_set_multiply(civue_draw_list *d, bool on);
+// what is pushed next takes away what it covers, like a mask cutting a hole
+// in a window that blends with what is under it.
+void civue_dl_set_erase(civue_draw_list *d, bool on);
 
 // a rounded rect, with an inside border when border_width is positive. radii go
 // from the top left clockwise.

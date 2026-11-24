@@ -58,7 +58,8 @@ struct civue_gfx {
   id<MTLCommandQueue> queue;
   QuadBuffer quad_buffers[QUAD_BUFFERS];
   id<MTLFunction> vs, fs;
-  // the pipelines by their pixel format, then whether they multiply.
+  // the pipelines by their pixel format, then whether they multiply or
+  // erase.
   NSMutableDictionary<NSNumber *, id<MTLRenderPipelineState>> *pipelines;
   id<MTLSamplerState> linear, nearest;
   civue_atlas atlas, color_atlas;
@@ -217,8 +218,8 @@ civue_atlas *civue_gfx_color_atlas(civue_gfx *g) {
 }
 
 static id<MTLRenderPipelineState> pipeline(civue_gfx *g, MTLPixelFormat format,
-                                           bool multiply) {
-  NSNumber *key = @((NSUInteger)format << 1 | multiply);
+                                           u8 mode) {
+  NSNumber *key = @((NSUInteger)format << 2 | mode);
   id<MTLRenderPipelineState> state = g->pipelines[key];
 
   if (state) {
@@ -242,13 +243,16 @@ static id<MTLRenderPipelineState> pipeline(civue_gfx *g, MTLPixelFormat format,
   d.vertexDescriptor = v;
 
   // premultiplied colors. multiplying is the destination times the source,
-  // plus what the source's coverage leaves of it.
+  // plus what the source's coverage leaves of it. erasing keeps only what
+  // the coverage leaves, alpha too.
   MTLRenderPipelineColorAttachmentDescriptor *att = d.colorAttachments[0];
   att.pixelFormat = format;
   att.blendingEnabled = YES;
-  att.sourceRGBBlendFactor =
-    multiply ? MTLBlendFactorDestinationColor : MTLBlendFactorOne;
-  att.sourceAlphaBlendFactor = MTLBlendFactorOne;
+  att.sourceRGBBlendFactor = mode == 1   ? MTLBlendFactorDestinationColor
+                             : mode == 2 ? MTLBlendFactorZero
+                                         : MTLBlendFactorOne;
+  att.sourceAlphaBlendFactor =
+    mode == 2 ? MTLBlendFactorZero : MTLBlendFactorOne;
   att.destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
   att.destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
 
@@ -548,7 +552,7 @@ void civue_gfx_encode(civue_gfx *g, void *command_buffer, void *target_texture,
     }
 
     f32 globals[4] = {(f32)width, (f32)height, 0, 0};
-    [enc setRenderPipelineState:pipeline(g, format, false)];
+    [enc setRenderPipelineState:pipeline(g, format, 0)];
     [enc setVertexBytes:globals length:sizeof globals atIndex:0];
     [enc setFragmentBytes:globals length:sizeof globals atIndex:0];
     [enc setVertexBuffer:quads offset:0 atIndex:QUAD_SLOT];
@@ -557,16 +561,17 @@ void civue_gfx_encode(civue_gfx *g, void *command_buffer, void *target_texture,
     [enc setFragmentSamplerState:g->linear atIndex:0];
     [enc setFragmentSamplerState:g->nearest atIndex:1];
 
-    bool multiplying = false;
+    u8 mode = 0;
 
     for (u32 b = 0; b < list->batches.len; b++) {
       const civue_batch *batch = &list->batches.v[b];
       u32 end = b + 1 < list->batches.len ? list->batches.v[b + 1].start
                                           : list->quads.len;
 
-      if (batch->multiply != multiplying) {
-        multiplying = batch->multiply;
-        [enc setRenderPipelineState:pipeline(g, format, multiplying)];
+      u8 want = batch->erase ? 2 : batch->multiply ? 1 : 0;
+      if (want != mode) {
+        mode = want;
+        [enc setRenderPipelineState:pipeline(g, format, mode)];
       }
 
       id<MTLTexture> image =

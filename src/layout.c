@@ -2101,13 +2101,14 @@ static bool lasting(const civue_ui *ui, const civue_tree *t, const Take *k,
   }
 
   // no image: the batch it was drawn in before, and any it started.
-  if (d->multiply || k->multiply ||
+  if (d->multiply || k->multiply || d->erase ||
       (k->batch && d->batches.v[k->batch - 1].texture != k->texture)) {
     return false;
   }
 
   for (u32 i = k->batch; i < d->batches.len; i++) {
-    if (d->batches.v[i].texture || d->batches.v[i].multiply) {
+    if (d->batches.v[i].texture || d->batches.v[i].multiply ||
+        d->batches.v[i].erase) {
       return false;
     }
   }
