@@ -189,6 +189,10 @@ civue_toggle_state civue_node_toggle(civue_ui *ui, bool on);
 // a slider over the node, its track the node's content box.
 civue_slider_state civue_node_slider(civue_ui *ui, double value, double min,
                                      double max, double anchor, double step);
+// a password field set in the text style the node passes on.
+civue_field_response civue_node_secret_field(civue_ui *ui, char **value,
+                                             const char *placeholder,
+                                             civue_field_look look);
 // a text field set in the text style the node passes on.
 civue_field_response civue_node_text_field(civue_ui *ui, char **value,
                                            const char *placeholder,

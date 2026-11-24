@@ -2327,6 +2327,13 @@ civue_slider_state civue_node_slider(civue_ui *ui, f64 value, f64 min, f64 max,
                       civue_node_content(ui), value, min, max, anchor, step);
 }
 
+civue_field_response civue_node_secret_field(civue_ui *ui, char **value,
+                                             const char *placeholder,
+                                             civue_field_look look) {
+  return civue_secret_field(ui, civue_node_id(ui), civue_node_rect(ui), value,
+                            placeholder, civue_node_text_style(ui), look);
+}
+
 civue_field_response civue_node_text_field(civue_ui *ui, char **value,
                                            const char *placeholder,
                                            civue_field_look look) {

@@ -50,5 +50,6 @@
 #define toggle(on) civue_node_toggle(CIVUE_DSL_UI, on)
 #define slider(...) civue_node_slider(CIVUE_DSL_UI, __VA_ARGS__)
 #define text_field(...) civue_node_text_field(CIVUE_DSL_UI, __VA_ARGS__)
+#define secret_field(...) civue_node_secret_field(CIVUE_DSL_UI, __VA_ARGS__)
 
 #endif

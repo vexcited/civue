@@ -25,4 +25,5 @@
 #undef toggle
 #undef slider
 #undef text_field
+#undef secret_field
 #undef CIVUE_DSL_H

@@ -42,6 +42,13 @@ civue_field_response civue_text_field(civue_ui *ui, civue_id id, civue_rect r,
                                       char **value, const char *placeholder,
                                       civue_text_style style,
                                       civue_field_look look);
+// a single line field for a password: it shows a bullet for each character,
+// is never copied out, and the input method is told it takes a secret.
+civue_field_response civue_secret_field(civue_ui *ui, civue_id id,
+                                        civue_rect r, char **value,
+                                        const char *placeholder,
+                                        civue_text_style style,
+                                        civue_field_look look);
 // several lines wrapped to the field's width from its top: enter starts a
 // line and the arrows move between them. what doesn't fit scrolls, keeping the
 // caret in view.

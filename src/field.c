@@ -171,6 +171,47 @@ static const civue_text_block *area_layout(civue_ui *ui, const char *s, usize n,
   return b;
 }
 
+// ---- secrets ----
+
+// what a secret field shows for each character.
+static const char BULLET[] = "\u2022";
+constexpr u32 BULLET_LEN = sizeof BULLET - 1;
+
+static u32 chars_before(const u8 *s, u32 n) {
+  u32 count = 0;
+  for (u32 i = 0; i < n; i++) {
+    count += (s[i] & 0xc0) != 0x80;
+  }
+  return count;
+}
+
+// a bullet for each character of `s`.
+static void put_masked(civue_bytes *out, const u8 *s, u32 n) {
+  u32 count = chars_before(s, n);
+  for (u32 i = 0; i < count; i++) {
+    buf_put(out, BULLET, BULLET_LEN);
+  }
+}
+
+// where a byte of the text is in what the field shows.
+static u32 shown_at(const civue_bytes *t, u32 byte, bool secret) {
+  return secret ? chars_before(t->v, byte) * BULLET_LEN : byte;
+}
+
+// the byte of the text where a byte of what the field shows is.
+static u32 text_at(const civue_bytes *t, u32 shown, bool secret) {
+  if (!secret) {
+    return shown;
+  }
+  u32 want = shown / BULLET_LEN, count = 0;
+  for (u32 i = 0; i < t->len; i++) {
+    if ((t->v[i] & 0xc0) != 0x80 && count++ == want) {
+      return i;
+    }
+  }
+  return t->len;
+}
+
 // ---- keys ----
 
 typedef struct {
@@ -178,12 +219,34 @@ typedef struct {
 } Edit;
 
 static void key(Field *f, const civue_key_press *k, const civue_text_block *b,
-                bool multiline, Edit *e) {
+                bool multiline, bool secret, Edit *e) {
   bool shift = k->mods & CIVUE_MOD_SHIFT, word = k->mods & CIVUE_MOD_ALT,
        line = k->mods & CIVUE_MOD_CMD, command = k->mods & CIVUE_MOD_CMD;
   const civue_bytes *t = &f->text;
   e->touched = true;
   u32 lo = sel_lo(f), hi = sel_hi(f);
+  // a secret has no words to move by, and is never copied out.
+  if (secret && (word || line)) {
+    switch (k->key) {
+      case CIVUE_KEY_LEFT:
+        move(f, 0, shift);
+        return;
+      case CIVUE_KEY_RIGHT:
+        move(f, t->len, shift);
+        return;
+      case CIVUE_KEY_BACKSPACE:
+      case CIVUE_KEY_DELETE:
+        if (lo == hi) {
+          f->anchor = k->key == CIVUE_KEY_BACKSPACE ? 0 : t->len;
+        }
+        replace(f, "", 0);
+        e->changed = true;
+        return;
+    }
+  }
+  if (secret && command && (k->key == 'c' || k->key == 'x')) {
+    return;
+  }
   bool vertical = false;
   u32 cl;
   f32 cx = caret_x(b, f->caret, &cl);
@@ -328,7 +391,8 @@ static void key(Field *f, const civue_key_press *k, const civue_text_block *b,
 static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
                                        char **value, const char *placeholder,
                                        civue_text_style style,
-                                       civue_field_look look, bool multiline) {
+                                       civue_field_look look, bool multiline,
+                                       bool secret) {
   civue_response resp = civue_interact(ui, id, r, CIVUE_SENSE_DRAG);
   if (resp.hovered) {
     civue_set_cursor(ui, CIVUE_CURSOR_TEXT);
@@ -354,8 +418,15 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
     civue_fill_stroke(ui, r, box.bg, box.border, box.border_width, box.radius);
     bool empty = !*v;
     const char *shown = empty ? placeholder : v;
+    civue_bytes masked = {};
+    if (secret && !empty) {
+      put_masked(&masked, (const u8 *)v, (u32)strlen(v));
+      buf_put(&masked, "", 1);
+      shown = (const char *)masked.v;
+    }
     const civue_text_block *b =
       area_layout(ui, shown, strlen(shown), style, wrap);
+    vec_free(&masked);
     if (multiline) {
       origin.y = civue_scroll_area(ui, sid, r, b->height + 8).y0 + 4;
     }
@@ -368,6 +439,9 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
     return out;
   }
   civue_claim_focus(ui);
+  if (secret) {
+    civue_claim_secure_input(ui);
+  }
   Field *f = field_of(ui, id);
   // the editor is made when focus starts, all of its text selected.
   bool fresh = !f->live;
@@ -384,8 +458,20 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
     f->follow = true;
   }
   Edit e = {};
-  const civue_text_block *b =
-    area_layout(ui, (const char *)f->text.v, f->text.len, style, wrap);
+  civue_bytes masked = {};
+  const civue_text_block *b = nullptr;
+#define LAYOUT_TEXT()                                                       \
+  do {                                                                      \
+    masked.len = 0;                                                         \
+    if (secret) {                                                           \
+      put_masked(&masked, f->text.v, f->text.len);                          \
+    }                                                                       \
+    b = secret ? area_layout(ui, (const char *)masked.v, masked.len, style, \
+                             wrap)                                          \
+               : area_layout(ui, (const char *)f->text.v, f->text.len,      \
+                             style, wrap);                                  \
+  } while (0)
+  LAYOUT_TEXT();
   civue_input *in = &ui->input;
   civue_field_box box = look.editing;
   civue_fill_stroke(ui, r, box.bg, box.border, box.border_width, box.radius);
@@ -402,7 +488,7 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
     civue_vec2 p =
       v2(in->mouse.x - origin.x + f->scroll, in->mouse.y - origin.y);
     if (resp.pressed) {
-      u32 at = MIN(hit(b, p), f->text.len);
+      u32 at = MIN(text_at(&f->text, hit(b, p), secret), f->text.len);
       if (in->clicks >= 2) {
         f->anchor =
           word_left(&f->text, at < f->text.len && word_byte(f->text.v[at])
@@ -416,7 +502,7 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
       e.touched = true;
     }
     else if (resp.dragging) {
-      f->caret = MIN(hit(b, p), f->text.len);
+      f->caret = MIN(text_at(&f->text, hit(b, p), secret), f->text.len);
       // past the edges it scrolls along.
       if (multiline && !rect_contains(r, in->mouse)) {
         civue_request_repaint(ui);
@@ -425,9 +511,11 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
     }
   }
   vec_each(&in->keys, k) {
-    key(f, k, b, multiline, &e);
-    b = area_layout(ui, (const char *)f->text.v, f->text.len, style, wrap);
+    key(f, k, b, multiline, secret, &e);
+    LAYOUT_TEXT();
   }
+#undef LAYOUT_TEXT
+  vec_free(&masked);
   if (in->text.len) {
     replace(f, (const char *)in->text.v, in->text.len);
     e.changed = e.touched = true;
@@ -448,11 +536,20 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
 
   // what an input method composes shows at the caret, underlined.
   civue_bytes shown = {};
-  buf_put(&shown, f->text.v, f->caret);
-  buf_put(&shown, in->preedit.v, in->preedit.len);
-  buf_put(&shown, f->text.v + f->caret, f->text.len - f->caret);
+  u32 preedit = (u32)in->preedit.len;
+  if (secret) {
+    put_masked(&shown, f->text.v, f->caret);
+    put_masked(&shown, in->preedit.v, (u32)in->preedit.len);
+    preedit = (u32)shown.len - shown_at(&f->text, f->caret, true);
+    put_masked(&shown, f->text.v + f->caret, f->text.len - f->caret);
+  }
+  else {
+    buf_put(&shown, f->text.v, f->caret);
+    buf_put(&shown, in->preedit.v, in->preedit.len);
+    buf_put(&shown, f->text.v + f->caret, f->text.len - f->caret);
+  }
   b = area_layout(ui, (const char *)shown.v, shown.len, style, wrap);
-  u32 caret = f->caret + (u32)in->preedit.len, cl;
+  u32 caret = shown_at(&f->text, f->caret, secret) + preedit, cl;
   f32 cx = caret_x(b, caret, &cl);
   // keeps the caret in view as it moves past the edges, and all of the
   // text once it fits.
@@ -491,7 +588,8 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
   civue_vec2 at = v2(origin.x - f->scroll, origin.y);
   f32 lh = line_height(b);
   civue_push_clip(ui, area);
-  u32 lo = sel_lo(f), hi = sel_hi(f);
+  u32 lo = shown_at(&f->text, sel_lo(f), secret),
+      hi = shown_at(&f->text, sel_hi(f), secret);
   if (lo != hi && !in->preedit.len) {
     for (u32 l = 0; l < b->nlines; l++) {
       u32 s = MAX(lo, b->lines[l].start), t = MIN(hi, b->lines[l].end);
@@ -518,7 +616,7 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
   civue_draw_text(ui, b, at, box.text);
   if (in->preedit.len) {
     u32 pl;
-    f32 p0 = caret_x(b, f->caret, &pl);
+    f32 p0 = caret_x(b, shown_at(&f->text, f->caret, secret), &pl);
     f32 y = at.y + (b->nlines ? b->lines[cl].baseline : b->baseline) + 2;
     civue_hline(ui, at.x + p0, at.x + cx, y, box.text);
   }
@@ -556,14 +654,22 @@ civue_field_response civue_text_field(civue_ui *ui, civue_id id, civue_rect r,
                                       char **value, const char *placeholder,
                                       civue_text_style style,
                                       civue_field_look look) {
-  return edit_field(ui, id, r, value, placeholder, style, look, false);
+  return edit_field(ui, id, r, value, placeholder, style, look, false, false);
+}
+
+civue_field_response civue_secret_field(civue_ui *ui, civue_id id,
+                                        civue_rect r, char **value,
+                                        const char *placeholder,
+                                        civue_text_style style,
+                                        civue_field_look look) {
+  return edit_field(ui, id, r, value, placeholder, style, look, false, true);
 }
 
 civue_field_response civue_text_area(civue_ui *ui, civue_id id, civue_rect r,
                                      char **value, const char *placeholder,
                                      civue_text_style style,
                                      civue_field_look look) {
-  return edit_field(ui, id, r, value, placeholder, style, look, true);
+  return edit_field(ui, id, r, value, placeholder, style, look, true, false);
 }
 
 char *civue_field_insert(civue_ui *ui, civue_id id, const char *text) {
