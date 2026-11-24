@@ -370,8 +370,7 @@ set(CIVUE_DARWIN_SOURCES
 set(CIVUE_LINUX_SOURCES
   src/linux/clipboard.c src/linux/cursors.c src/linux/filepanel.c
   src/linux/gfx.c src/linux/image.c src/linux/pasteboard.c src/linux/spell.c
-  src/linux/svg.c src/linux/text.c src/linux/vk.c src/linux/webview.c
-  src/linux/window.c)
+  src/linux/svg.c src/linux/text.c src/linux/vk.c src/linux/window.c)
 
 if(APPLE)
   enable_language(OBJC)
@@ -408,6 +407,17 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   else()
     message(STATUS "civue: no gstreamer, videos are left out")
     target_sources(civue PRIVATE src/linux/novideo.c)
+  endif()
+
+  # web views are wpe webkit's where it is installed.
+  pkg_check_modules(CIVUE_WPE IMPORTED_TARGET wpe-webkit-2.0 wpe-platform-2.0)
+
+  if(CIVUE_WPE_FOUND)
+    target_sources(civue PRIVATE src/linux/webview.c)
+    target_link_libraries(civue PUBLIC PkgConfig::CIVUE_WPE)
+  else()
+    message(STATUS "civue: no wpe webkit, web views are left out")
+    target_sources(civue PRIVATE src/linux/nowebview.c)
   endif()
 
   # the wayland protocols past the core one, their client code generated.

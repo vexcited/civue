@@ -8,10 +8,11 @@ extern "C" {
 #endif
 
 /* ========================================================================== */
-/* a web page of the system's over a rect of the frame, a WKWebView on macos. */
-/* shown like a widget, by a call each frame it is wanted. macos only for     */
-/* now: civue_webview_new answers nullptr on linux, and the rest takes it.    */
-/* everything here runs on the main thread.                                   */
+/* a web page of the system's over a rect of the frame, a WKWebView on macos  */
+/* and WPE WebKit painting into the frame on linux, where a build without it  */
+/* has civue_webview_new answer nullptr and the rest take it. shown like a    */
+/* widget, by a call each frame it is wanted. everything here runs on the     */
+/* main thread.                                                               */
 /* ========================================================================== */
 
 typedef struct civue_webview civue_webview;
