@@ -8,13 +8,16 @@ endif()
 
 project(layout VERSION 0.0.0 LANGUAGES C)
 
-#   FetchContent_Declare(civue
-#     GIT_REPOSITORY https://code.vexcited.com/ciko/civue.git
-#     GIT_TAG main)
+# this checkout when the example is in it, otherwise it is fetched.
 include(FetchContent)
+get_filename_component(local ${CMAKE_CURRENT_SOURCE_DIR}/../.. ABSOLUTE)
+if(NOT FETCHCONTENT_SOURCE_DIR_CIVUE AND EXISTS ${local}/CMakeLists.txt)
+  set(FETCHCONTENT_SOURCE_DIR_CIVUE ${local})
+endif()
 if(NOT TARGET civue::civue)
   FetchContent_Declare(civue
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../..)
+    GIT_REPOSITORY https://code.vexcited.com/ciko/civue.git
+    GIT_TAG main)
   FetchContent_MakeAvailable(civue)
 endif()
 
