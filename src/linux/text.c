@@ -7,11 +7,15 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include FT_MULTIPLE_MASTERS_H
+#include <fcntl.h>
 #include <hb-ot.h>
 #include <hb.h>
 #include <math.h>
 #include <stddefer.h>
 #include <stdlib.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 // horizontal positions a glyph is rasterized at within a pixel.
 constexpr u32 SUBPIXELS = 4;
@@ -33,7 +37,13 @@ typedef struct {
   char *path;
   u32 index;
   hb_face_t *hb;
+  // the face without a size, asked what code points it has.
+  hb_font_t *probe;
+  // a file's bytes are mapped, the pages never read taking no memory.
+  bool mapped;
   bool color, variable;
+  // fontconfig gave it for a code point the ui's faces lack.
+  bool fallback;
 } Source;
 
 // a source at a size and weight, what glyphs are drawn with.
@@ -81,13 +91,53 @@ struct civue_text_system {
   civue_map layout_index; // key to index + 1.
   Vec(GlyphEntry) glyphs;
   civue_map glyph_index;
+  // the buffer runs are shaped in, kept from a text to the next.
+  hb_buffer_t *shaping;
   u64 frame;
 };
 
-static void source_set(Source *s, const u8 *data, usize len) {
+// a font file's bytes as the system's cache has them: a cjk or an emoji face
+// is tens of megabytes, of which a line of text reads a few pages.
+static bool file_map(const char *path, const u8 **data, usize *len) {
+  int fd = open(path, O_RDONLY | O_CLOEXEC);
+  if (fd < 0) {
+    return false;
+  }
+  defer close(fd);
+  struct stat st;
+  if (fstat(fd, &st) < 0 || st.st_size <= 0) {
+    return false;
+  }
+  void *at = mmap(nullptr, (usize)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+  if (at == MAP_FAILED) {
+    return false;
+  }
+  *data = at;
+  *len = (usize)st.st_size;
+  return true;
+}
+
+static void source_drop(Source *s) {
+  if (s->probe) {
+    hb_font_destroy(s->probe);
+  }
   if (s->hb) {
     hb_face_destroy(s->hb);
   }
+  if (s->mapped) {
+    munmap((void *)s->data, s->len);
+  }
+  else if (s->path) {
+    free((void *)s->data);
+  }
+  s->probe = nullptr;
+  s->hb = nullptr;
+  s->data = nullptr;
+  s->len = 0;
+  s->mapped = false;
+}
+
+static void source_set(Source *s, const u8 *data, usize len) {
   s->data = data;
   s->len = len;
   hb_blob_t *blob = hb_blob_create((const char *)data, (u32)len,
@@ -141,12 +191,7 @@ void civue_text_free(civue_text_system *t) {
   vec_free(&t->fonts);
   map_free(&t->font_index);
   vec_each(&t->sources, s) {
-    if (s->hb) {
-      hb_face_destroy(s->hb);
-    }
-    if (s->path) {
-      free((void *)s->data);
-    }
+    source_drop(s);
     free(s->path);
   }
   vec_free(&t->sources);
@@ -154,6 +199,9 @@ void civue_text_free(civue_text_system *t) {
   map_free(&t->system);
   vec_free(&t->glyphs);
   map_free(&t->glyph_index);
+  if (t->shaping) {
+    hb_buffer_destroy(t->shaping);
+  }
   FT_Done_FreeType(t->ft);
   own_free(t);
 }
@@ -163,9 +211,7 @@ void civue_text_free(civue_text_system *t) {
 static void source_replace(civue_text_system *t, u32 src, const u8 *data,
                            usize n) {
   Source *s = &t->sources.v[src];
-  if (s->path) {
-    free((void *)s->data);
-  }
+  source_drop(s);
   u8 *copy = xmalloc(n);
   memcpy(copy, data, n);
   // owned like a file's bytes.
@@ -228,12 +274,14 @@ static u32 file_source(civue_text_system *t, const char *path, u32 index,
       return i;
     }
   }
-  civue_bytes b = {};
-  if (!file_read(path, &b)) {
+  const u8 *data;
+  usize len;
+  if (!file_map(path, &data, &len)) {
     return UINT32_MAX;
   }
-  Source s = {.path = xstrdup(path), .index = index, .color = color};
-  source_set(&s, b.v, b.len);
+  Source s = {
+    .path = xstrdup(path), .index = index, .color = color, .mapped = true};
+  source_set(&s, data, len);
   vec_push(&t->sources, s);
   return t->sources.len - 1;
 }
@@ -257,15 +305,15 @@ static void find_emoji(civue_text_system *t) {
   if (m && FcPatternGetString(m, FC_FILE, 0, &file) == FcResultMatch) {
     FcPatternGetInteger(m, FC_INDEX, 0, &index);
     FcPatternGetBool(m, FC_COLOR, 0, &color);
-    if (color) {
-      civue_bytes b = {};
-      if (file_read((const char *)file, &b)) {
-        Source *s = &t->sources.v[SRC_EMOJI];
-        s->path = xstrdup((const char *)file);
-        s->index = (u32)index;
-        s->color = true;
-        source_set(s, b.v, b.len);
-      }
+    const u8 *data;
+    usize len;
+    if (color && file_map((const char *)file, &data, &len)) {
+      Source *s = &t->sources.v[SRC_EMOJI];
+      s->path = xstrdup((const char *)file);
+      s->index = (u32)index;
+      s->color = true;
+      s->mapped = true;
+      source_set(s, data, len);
     }
   }
   if (m) {
@@ -274,17 +322,16 @@ static void find_emoji(civue_text_system *t) {
   FcPatternDestroy(p);
 }
 
-static bool covers(const Source *s, u32 cp) {
-  hb_font_t *f = nullptr;
+static bool covers(Source *s, u32 cp) {
   if (!s->hb) {
     return false;
   }
-  // a face's cmap answers without a size.
-  f = hb_font_create(s->hb);
+  // a face's cmap answers without a size, through a font made once.
+  if (!s->probe) {
+    s->probe = hb_font_create(s->hb);
+  }
   hb_codepoint_t g;
-  bool has = hb_font_get_nominal_glyph(f, cp, &g);
-  hb_font_destroy(f);
-  return has;
+  return hb_font_get_nominal_glyph(s->probe, cp, &g);
 }
 
 // the face text in the ui or the code face is set in at `weight`: the app's, or
@@ -336,6 +383,15 @@ static u32 fallback_for(civue_text_system *t, u32 cp) {
     return (u32)v;
   }
   u32 found = UINT32_MAX;
+  // a face found for another code point often has this one: the rest of
+  // its script. asking it takes a lookup, where fontconfig sorts every
+  // face of the system.
+  for (u32 i = SRC_EMOJI + 1; i < t->sources.len; i++) {
+    if (t->sources.v[i].fallback && covers(&t->sources.v[i], cp)) {
+      map_put(&t->fallback, (u64)cp + 1, i);
+      return i;
+    }
+  }
   FcPattern *p = FcPatternCreate();
   FcCharSet *cs = FcCharSetCreate();
   FcCharSetAddChar(cs, cp);
@@ -355,6 +411,9 @@ static u32 fallback_for(civue_text_system *t, u32 cp) {
     FcPatternGetInteger(m, FC_INDEX, 0, &index);
     FcPatternGetBool(m, FC_COLOR, 0, &color);
     found = file_source(t, (const char *)file, (u32)index, color);
+    if (found != UINT32_MAX) {
+      t->sources.v[found].fallback = true;
+    }
   }
   if (m) {
     FcPatternDestroy(m);
@@ -457,6 +516,10 @@ static bool space(u32 c) {
 
 // a combining mark or joiner, drawn with what it follows.
 static bool joins(u32 c) {
+  // the first combining mark is U+0300.
+  if (c < 0x300) {
+    return false;
+  }
   hb_unicode_funcs_t *u = hb_unicode_funcs_get_default();
   hb_unicode_general_category_t g = hb_unicode_general_category(u, c);
   return g == HB_UNICODE_GENERAL_CATEGORY_NON_SPACING_MARK ||
@@ -532,7 +595,13 @@ static civue_text_block *build(civue_text_system *t, const char *s, usize n,
   // bidi levels, the paragraph's direction from its first strong letter.
   u8 *levels = xcalloc(count + 1, 1);
   u8 base_level = 0;
-  if (count) {
+  // nothing under hebrew is set right to left or says so: every level is
+  // zero, which is most text.
+  bool ltr = true;
+  for (u32 i = 0; i < count && ltr; i++) {
+    ltr = cps.v[i] < 0x590;
+  }
+  if (count && !ltr) {
     FriBidiCharType *types = xcalloc(count, sizeof *types);
     FriBidiBracketType *brackets = xcalloc(count, sizeof *brackets);
     FriBidiLevel *lv = xcalloc(count, sizeof *lv);
@@ -552,7 +621,10 @@ static civue_text_block *build(civue_text_system *t, const char *s, usize n,
   // runs of one face and level, shaped.
   Vec(Run) runs = {};
   Vec(Shaped) shaped = {};
-  hb_buffer_t *buf = hb_buffer_create();
+  if (!t->shaping) {
+    t->shaping = hb_buffer_create();
+  }
+  hb_buffer_t *buf = t->shaping;
   hb_feature_t features[2];
   u32 nfeatures = 0;
   if (st.tnum) {
@@ -584,7 +656,6 @@ static civue_text_block *build(civue_text_system *t, const char *s, usize n,
     vec_push(&runs, r);
     i = j;
   }
-  hb_buffer_destroy(buf);
   // each code point's share of its cluster's advance: a ligature's
   // characters share its width for their carets. letter spacing goes after
   // every character, like core text's kern.
