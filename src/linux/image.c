@@ -1271,8 +1271,164 @@ u8 *civue__image_decode(const u8 *bytes, usize n, u32 max_pixels, u32 *width,
   return rgba;
 }
 
-// gdk-pixbuf's animations are not read yet: the first frame shows still.
-bool civue__image_decode_frames(const u8 *, usize, u32, usize,
-                                civue__frames *) {
+/* ========================================================================== */
+/* frames.                                                                    */
+/* ========================================================================== */
+
+// the size every frame of `count` is given, as the other platforms size
+// them. false when each would be a smudge: the first one alone is better.
+static bool frames_size(u32 width, u32 height, u32 count, u32 max_pixels,
+                        usize max_bytes, u32 *w, u32 *h) {
+  f64 longest = MAX(width, height);
+  f64 scale = max_pixels > 0 ? MIN(1.0, max_pixels / longest) : 1.0;
+  f64 need = (f64)width * height * scale * scale * 4.0 * (f64)count;
+
+  if (need > (f64)max_bytes) {
+    scale *= sqrt((f64)max_bytes / need);
+  }
+
+  *w = (u32)MAX(round(width * scale), 1.0);
+  *h = (u32)MAX(round(height * scale), 1.0);
+  return MAX(*w, *h) >= MIN(longest, 64.0);
+}
+
+static bool gif_frames(const u8 *bytes, usize n, u32 max_pixels,
+                       usize max_bytes, civue__frames *out) {
+  Gif g;
+  f32 delay;
+  u32 count = 0;
+
+  if (!gif_open(&g, bytes, n)) {
+    return false;
+  }
+
+  while (gif_next(&g, false, &delay)) {
+    count++;
+  }
+
+  gif_close(&g);
+
+  u32 w, h;
+
+  if (count < 2 || !gif_open(&g, bytes, n)) {
+    return false;
+  }
+
+  defer gif_close(&g);
+
+  if (!frames_size(g.width, g.height, count, max_pixels, max_bytes, &w, &h)) {
+    return false;
+  }
+
+  usize frame = (usize)w * h * 4, whole = (usize)g.width * g.height * 4;
+  u8 *rgba = calloc(count, frame);
+  f32 *delays = calloc(count, sizeof(f32));
+  u8 *scratch = malloc(whole);
+  u32 made = 0;
+  bool ok = rgba && delays && scratch;
+
+  while (ok && made < count && gif_next(&g, true, &delays[made])) {
+    // scaling writes over what it reads, the canvas is the next frame's.
+    memcpy(scratch, g.canvas, whole);
+    ok = scale_into(scratch, g.width, g.height, rgba + made * frame, w, h);
+    made++;
+  }
+
+  free(scratch);
+
+  if (!ok || made < 2) {
+    free(rgba);
+    free(delays);
+    return false;
+  }
+
+  *out = (civue__frames){rgba, delays, w, h, made};
+  return true;
+}
+
+#ifdef CIVUE_WEBP
+static bool webp_frames(const u8 *bytes, usize n, u32 max_pixels,
+                        usize max_bytes, civue__frames *out) {
+  WebPAnimDecoderOptions options;
+
+  if (!WebPAnimDecoderOptionsInit(&options)) {
+    return false;
+  }
+
+  options.color_mode = MODE_rgbA;
+
+  WebPData data = {bytes, n};
+  WebPAnimDecoder *dec = WebPAnimDecoderNew(&data, &options);
+
+  if (!dec) {
+    return false;
+  }
+
+  defer WebPAnimDecoderDelete(dec);
+
+  WebPAnimInfo info;
+  u32 w, h;
+
+  if (!WebPAnimDecoderGetInfo(dec, &info) || info.frame_count < 2 ||
+      !info.canvas_width || !info.canvas_height ||
+      (u64)info.canvas_width * info.canvas_height > DECODED_PIXELS_MAX ||
+      !frames_size(info.canvas_width, info.canvas_height, info.frame_count,
+                   max_pixels, max_bytes, &w, &h)) {
+    return false;
+  }
+
+  u32 count = info.frame_count, made = 0;
+  usize frame = (usize)w * h * 4;
+  usize whole = (usize)info.canvas_width * info.canvas_height * 4;
+  u8 *rgba = calloc(count, frame);
+  f32 *delays = calloc(count, sizeof(f32));
+  u8 *scratch = malloc(whole);
+  bool ok = rgba && delays && scratch;
+  int last = 0;
+
+  while (ok && made < count && WebPAnimDecoderHasMoreFrames(dec)) {
+    u8 *canvas;
+    int stamp;
+
+    if (!WebPAnimDecoderGetNext(dec, &canvas, &stamp)) {
+      break;
+    }
+
+    f32 delay = (f32)(stamp - last) / 1000.0f;
+
+    last = stamp;
+    delays[made] = delay <= 0.01f ? 0.1f : delay;
+    memcpy(scratch, canvas, whole);
+    ok = scale_into(scratch, info.canvas_width, info.canvas_height,
+                    rgba + made * frame, w, h);
+    made++;
+  }
+
+  free(scratch);
+
+  if (!ok || made < 2) {
+    free(rgba);
+    free(delays);
+    return false;
+  }
+
+  *out = (civue__frames){rgba, delays, w, h, made};
+  return true;
+}
+#endif
+
+// the frames of gifs and webps. an animated png shows its first one still.
+bool civue__image_decode_frames(const u8 *bytes, usize n, u32 max_pixels,
+                                usize max_bytes, civue__frames *out) {
+  if (is_gif(bytes, n)) {
+    return gif_frames(bytes, n, max_pixels, max_bytes, out);
+  }
+
+#ifdef CIVUE_WEBP
+  if (is_webp(bytes, n)) {
+    return webp_frames(bytes, n, max_pixels, max_bytes, out);
+  }
+#endif
+
   return false;
 }
