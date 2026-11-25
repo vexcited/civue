@@ -2521,6 +2521,42 @@ static void image_rim(const Raster *r, const civue_quad *q, const u8 *row,
   }
 }
 
+// four floats at once, a channel each, where the processor has them: neon
+// on arm64 and sse2 on x86. they add, multiply and divide like floats.
+#if defined(__ARM_NEON) && defined(__aarch64__)
+#define CIVUE_F4 1
+typedef float32x4_t f4;
+
+static inline f4 f4_of(f32 v) {
+  return vdupq_n_f32(v);
+}
+
+// a texel's four bytes.
+static inline f4 f4_bytes(const u8 *p) {
+  u32 t;
+  memcpy(&t, p, sizeof t);
+
+  return vcvtq_f32_u32(vmovl_u16(vget_low_u16(vmovl_u8(vcreate_u8(t)))));
+}
+#elif defined(__SSE2__)
+#define CIVUE_F4 1
+typedef __m128 f4;
+
+static inline f4 f4_of(f32 v) {
+  return _mm_set1_ps(v);
+}
+
+static inline f4 f4_bytes(const u8 *p) {
+  u32 t;
+  memcpy(&t, p, sizeof t);
+
+  __m128i zero = _mm_setzero_si128();
+
+  return _mm_cvtepi32_ps(_mm_unpacklo_epi16(
+    _mm_unpacklo_epi8(_mm_cvtsi32_si128((i32)t), zero), zero));
+}
+#endif
+
 // an image scaled: image_at's math a row at a time, and nothing for the
 // pixels whose texels are all see through, which most of a frame around an
 // avatar is.
@@ -2538,6 +2574,14 @@ static void image_scaled(const Raster *r, const civue_quad *q, civue_box b) {
       im->pixels + (usize)clampf(floorf(vv) + 1, 0, h1) * im->stride};
     const u8 *near = im->pixels + (usize)clampf(floorf(v), 0, h1) * im->stride;
     u8 *d = pixel(r->s, b.x0, y);
+#ifdef CIVUE_F4
+    // where the rounding covers the row's pixels whole, and asks nothing.
+    i32 whole_from = b.x0, whole_to = b.x1;
+
+    if (!tile) {
+      whole_span(q, fy, &whole_from, &whole_to);
+    }
+#endif
 
     for (i32 x = b.x0; x < b.x1; x++, d += 4) {
       f32 fx = (f32)x + 0.5f, u = image_u(q, im, fx), c[4];
@@ -2568,6 +2612,30 @@ static void image_scaled(const Raster *r, const civue_quad *q, civue_box b) {
         if (!(t[0] | t[1] | t[2] | t[3])) {
           continue;
         }
+
+#ifdef CIVUE_F4
+        // the four channels at once: the loop below, a lane a channel.
+        if (!r->blending) {
+          f4 left = f4_of(1 - wx), right = f4_of(wx);
+          f4 top = f4_bytes(rows[0] + x0) * left + f4_bytes(rows[0] + x1) * right;
+          f4 bottom =
+            f4_bytes(rows[1] + x0) * left + f4_bytes(rows[1] + x1) * right;
+          f4 color = (top * f4_of(1 - wy) + bottom * f4_of(wy)) / f4_of(255.0f);
+
+          color = color * f4_of(q->color[3]);
+
+          if (x < whole_from || x >= whole_to) {
+            f32 px = fx - q->rect[0] - hx;
+
+            color = color *
+                    f4_of(clamp01(0.5f - sd_rounded(px, py, hx, hy, q->radii)));
+          }
+
+          // red first in the image, blue first in the pixels.
+          blend_bgra(d, __builtin_shufflevector(color, color, 2, 1, 0, 3));
+          continue;
+        }
+#endif
 
         for (u32 i = 0; i < 4; i++) {
           f32 top = rows[0][x0 + i] * (1 - wx) + rows[0][x1 + i] * wx;
