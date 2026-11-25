@@ -88,7 +88,10 @@ The modules stack in that order and each only uses the ones above it. An app tha
 - **Frames on demand.** The window builds a frame when input arrives, when `civue_request_repaint` or
   `civue_request_repaint_after` asked, or while an animation runs, then sleeps. On macOS the view's `CADisplayLink`
   drives it and pauses after eight idle refreshes. On Wayland the compositor's frame callback paces
-  it, two frames in flight. Live resizes draw each size inside the resize's transaction, so nothing stretches.
+  it, two frames in flight. No callback comes for a frame that changed nothing, so the frames `civue_window_wake`
+  asks for after one come a display's frame apart, then further while they keep changing nothing, a tenth of a
+  second at most: an app told a hundred times a second of what its window does not show builds few frames for it.
+  Live resizes draw each size inside the resize's transaction, so nothing stretches.
 - **Interaction from the last frame.** `civue_interact` registers a rect and answers with what the pointer did,
   hovered from the topmost region of the previous frame, so menus and popovers drawn later still win. Presses,
   drags, double clicks, focus, a keyboard focus ring and repaint requests all come from that.
@@ -186,7 +189,7 @@ civue_icons(app ICONS mdi:home COLLECTIONS app=${CMAKE_CURRENT_SOURCE_DIR}/icons
   by the image they sample. A frame's quads go to one of three buffers kept for reuse, so steady frames allocate
   nothing on the gpu.
 - **Atlases.** Glyphs and icons go into 2048 pixel atlases packed in shelves. On macOS their pixels are memory the gpu reads in place, so nothing is uploaded and nothing is kept twice. Colors blend on srgb encoded values like browsers do.
-- **On the cpu.** `civue_raster` draws a list as the shader does: rects and shadows are filled in rows but for their curved corners, which ask the shader's math a pixel at a time, translucent rows are blended four pixels at a time and glyphs sixteen. Its frames differ from the gpu's by two steps of a color at most, on a few dozen pixels of a window.
+- **On the cpu.** `civue_raster` draws a list as the shader does: rects and shadows are filled in rows but for their curved corners, which ask the shader's math a pixel at a time, translucent rows are blended four pixels at a time and glyphs sixteen. That is NEON on arm64, macOS and Linux alike. On x86 the same paths are SSE2, eight pixels at a time where the build has AVX2, and a clear or an opaque rect larger than the caches near a core is written past them, which arm64 cores do by themselves. A scaled image is read between its texels four channels at a time on both. Its frames differ from the gpu's by two steps of a color at most, on a few dozen pixels of a window.
 - **Text.** Core Text lays text out on macOS, HarfBuzz, FriBidi and fontconfig on Linux, FreeType rasterizes there.
   Layouts are cached per text, style and scale and forgotten after 600 frames unused, and once there are thousands of them after 4 on macOS and 30 on Linux. Text wrapped to a new width is not shaped again: on macOS plain ascii is cut from the line it was set on, where Core Text would break it, and its wrapped blocks go two frames after they were last asked. A block remembers where its glyphs are in the atlas, and they go to the list in one run. A line of plain ascii is not given to Core Text's lines at all on macOS: its glyphs and advances are kept per font and placed by one private call, `CTFontShapeGlyphs`, six times faster. The first texts of a font, then one in 256, are held against the line Core Text makes, and the font goes back to lines for good once they differ or where the call is missing. Glyphs are rasterized at four
   subpixel positions on demand.
@@ -237,6 +240,10 @@ icon registry and widget state. What it hands over comes from `malloc` and is th
 from the clipboard, paths, text field values and the arrays in `civue_input`. Arrays are `CIVUE_VEC(T)`,
 `{v, len, cap}` grown with `realloc`, so the app may keep growing them.
 
+On Linux the system's font files are mapped, not read: a CJK or an emoji face is tens of megabytes, of which a line
+of text touches a few pages. What frames free goes back to the system once the window is about to wait a quarter of
+a second or more, ten seconds apart at most, where glibc would keep it in its heap.
+
 ## Building
 
 It depends on cilo, fetched by CMake unless `FETCHCONTENT_SOURCE_DIR_CILO` points at a checkout. C23 with the GNU
@@ -245,20 +252,29 @@ extensions, clang 19 or later or Apple clang 21, CMake 3.29 and Ninja.
 - **macOS 14 or later**, Apple silicon, with Xcode's Metal toolchain: `xcodebuild -downloadComponent MetalToolchain`.
 - **Linux** with glslc, Vulkan, Wayland with wayland-scanner, xkbcommon, FreeType, HarfBuzz, fontconfig, FriBidi,
   librsvg, cairo, GIO and enchant. GStreamer plays videos and WPE WebKit shows web views where they are installed,
-  both are left out otherwise. Vulkan is only loaded once a frame needs the gpu. On Ubuntu:
+  both are left out otherwise, and each is loaded by the first video or web view an app makes, never at launch.
+  Vulkan is only loaded once a frame needs the gpu. PNG, JPEG, WebP and GIF images are decoded in the process by
+  libpng, libjpeg-turbo 3 and libwebp where they are installed, with Little CMS for the ones in a color profile of
+  their own. gdk-pixbuf reads the other formats, and those too without the libraries. Set `CC=clang`, CMake picks
+  gcc otherwise. On Ubuntu:
 
 ```sh
 sudo apt install clang cmake ninja-build pkg-config glslc libvulkan-dev libwayland-dev libwayland-bin \
   libxkbcommon-dev libfreetype-dev libharfbuzz-dev libfontconfig-dev libfribidi-dev librsvg2-dev libcairo2-dev \
-  libglib2.0-dev libenchant-2-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libwpewebkit-2.0-dev
+  libglib2.0-dev libenchant-2-dev libpng-dev libturbojpeg0-dev libwebp-dev liblcms2-dev \
+  libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libwpewebkit-2.0-dev
 ```
 
 On Arch:
 
 ```sh
 sudo pacman -S clang cmake ninja pkgconf shaderc vulkan-headers vulkan-icd-loader wayland xkbcommon freetype2 \
-  harfbuzz fontconfig fribidi librsvg cairo glib2 enchant gstreamer gst-plugins-base gst-plugins-good gst-libav wpewebkit
+  harfbuzz fontconfig fribidi librsvg cairo glib2 enchant libpng libjpeg-turbo libwebp lcms2 \
+  gstreamer gst-plugins-base gst-plugins-good gst-libav wpewebkit
 ```
+
+Linux is x86-64 or arm64. A build for the machine it runs on adds `-DCMAKE_C_FLAGS=-march=native`, `-mcpu=native`
+on arm64: the cpu draws the frames on Linux, with AVX2 where an x86-64 build may count on it and NEON on arm64.
 
 ```sh
 cmake -S . -B build -G Ninja -DFETCHCONTENT_SOURCE_DIR_CILO=../ciko-cilo
