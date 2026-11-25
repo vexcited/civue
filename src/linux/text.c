@@ -93,6 +93,8 @@ struct civue_text_system {
   civue_map glyph_index;
   // the buffer runs are shaped in, kept from a text to the next.
   hb_buffer_t *shaping;
+  // the glyphs of the block being drawn, gathered to go in one run.
+  Vec(civue_glyph_quad) quads;
   u64 frame;
 };
 
@@ -160,6 +162,7 @@ civue_text_system *civue_text_new() {
 }
 
 static void block_free(civue_text_block *b) {
+  free(b->cache);
   free(b->glyphs);
   free(b->carets);
   free(b->lines);
@@ -202,6 +205,7 @@ void civue_text_free(civue_text_system *t) {
   if (t->shaping) {
     hb_buffer_destroy(t->shaping);
   }
+  vec_free(&t->quads);
   FT_Done_FreeType(t->ft);
   own_free(t);
 }
@@ -1035,15 +1039,92 @@ static const GlyphEntry *glyph(civue_text_system *t, civue_atlas *mask,
   return &vec_last(&t->glyphs);
 }
 
+// where a block's glyphs are in the atlas, found once for the fraction of a
+// pixel it is drawn at.
+// a glyph that draws nothing, a space for one.
+constexpr u32 EMPTY = UINT32_MAX;
+static_assert(SUBPIXELS == 4);
+
+typedef struct {
+  // the glyph's entry + 1, EMPTY, or 0 when it could not be made: it is
+  // asked for again the next time.
+  u32 entry;
+  // whole pixels from the block's origin, floored, over the two bits of
+  // the part of a pixel it is drawn at.
+  i32 placed;
+} Found;
+
+typedef struct {
+  f64 fraction;
+  Found v[];
+} Drawn;
+
+static u32 find(civue_text_system *t, civue_atlas *mask, civue_atlas *color,
+                const civue_glyph *g, u32 sub) {
+  const GlyphEntry *e = glyph(t, mask, color, g, sub);
+  if (!e) {
+    return 0;
+  }
+  return e->w && e->h ? (u32)(e - t->glyphs.v) + 1 : EMPTY;
+}
+
+static Drawn *drawn(civue_text_system *t, civue_atlas *mask, civue_atlas *color,
+                    const civue_text_block *b, f64 fraction) {
+  Drawn *d = b->cache;
+  if (d && d->fraction == fraction) {
+    return d;
+  }
+  if (!d) {
+    d = xmalloc(sizeof *d + b->nglyphs * sizeof *d->v);
+    ((civue_text_block *)b)->cache = d;
+  }
+  d->fraction = fraction;
+  for (u32 i = 0; i < b->nglyphs; i++) {
+    const civue_glyph *g = &b->glyphs[i];
+    f64 x = fraction + g->x, px = floor(x);
+    u32 sub = (u32)floor((x - px) * SUBPIXELS) % SUBPIXELS;
+    d->v[i] = (Found){find(t, mask, color, g, sub), (i32)px * 4 + (i32)sub};
+  }
+  return d;
+}
+
+// light text on dark grounds looks thinner, browsers boost it.
+static f32 gamma_of(civue_color c) {
+  return 1 - 0.45f * (0.2126f * c.r + 0.7152f * c.g + 0.0722f * c.b);
+}
+
 void civue_text_draw(civue_text_system *t, civue_draw_list *d,
                      civue_atlas *mask, civue_atlas *color,
                      const civue_text_block *b, civue_vec2 origin,
                      civue_color base, const civue_text_span *spans,
                      u32 nspans) {
+  if (!b->nglyphs) {
+    return;
+  }
   f64 s = b->scale;
   f64 ox = origin.x * s, oy = round(origin.y * s);
+  f64 whole = floor(ox);
+  Drawn *found = drawn(t, mask, color, b, ox - whole);
+  // glyphs tinted alike go to the list in one run.
+  t->quads.len = 0;
+  vec_reserve(&t->quads, b->nglyphs);
+  civue_color run = base;
   for (u32 i = 0; i < b->nglyphs; i++) {
+    Found *f = &found->v[i];
+    if (f->entry == EMPTY) {
+      continue;
+    }
     const civue_glyph *g = &b->glyphs[i];
+    const GlyphEntry *e = f->entry ? &t->glyphs.v[f->entry - 1] : nullptr;
+    // an atlas that started over since has it somewhere else.
+    if (!e || e->generation != (e->color ? color : mask)->generation)
+      [[clang::unlikely]] {
+      f->entry = find(t, mask, color, g, (u32)f->placed & 3);
+      if (!f->entry || f->entry == EMPTY) {
+        continue;
+      }
+      e = &t->glyphs.v[f->entry - 1];
+    }
     civue_color c = base;
     for (u32 k = 0; k < nspans; k++) {
       if (g->byte >= spans[k].start && g->byte < spans[k].end) {
@@ -1051,21 +1132,20 @@ void civue_text_draw(civue_text_system *t, civue_draw_list *d,
         break;
       }
     }
-    // light text on dark grounds looks thinner, browsers boost it.
-    f32 gamma = 1 - 0.45f * (0.2126f * c.r + 0.7152f * c.g + 0.0722f * c.b);
-    f64 x = ox + g->x, px = floor(x);
-    u32 sub = (u32)floor((x - px) * SUBPIXELS) % SUBPIXELS;
-    f64 y = round(oy + g->y);
-    const GlyphEntry *e = glyph(t, mask, color, g, sub);
-    if (!e || !e->w || !e->h) {
+    f64 x = whole + (f->placed >> 2) + e->left, y = round(oy + g->y) + e->top;
+    bool same = c.r == run.r && c.g == run.g && c.b == run.b && c.a == run.a;
+    if (e->color || !same) {
+      civue_dl_masks(d, t->quads.v, t->quads.len, run, gamma_of(run));
+      t->quads.len = 0;
+      run = c;
+    }
+    if (e->color) {
+      civue_dl_color_glyph(d, rect_xywh(x, y, e->w, e->h), e->uv, c.a);
       continue;
     }
-    civue_rect r = rect_xywh(px + e->left, y + e->top, e->w, e->h);
-    if (e->color) {
-      civue_dl_color_glyph(d, r, e->uv, c.a);
-    }
-    else {
-      civue_dl_mask(d, r, e->uv, c, gamma);
-    }
+    t->quads.v[t->quads.len++] =
+      (civue_glyph_quad){{(f32)x, (f32)y, (f32)e->w, (f32)e->h},
+                         {e->uv[0], e->uv[1], e->uv[2], e->uv[3]}};
   }
+  civue_dl_masks(d, t->quads.v, t->quads.len, run, gamma_of(run));
 }
