@@ -40,6 +40,10 @@ constexpr f64 APART = 0.05;
 constexpr f64 GPU_KEPT = 2.5;
 // how long a still window keeps the buffers it does not show.
 constexpr f64 KEPT_FOR = 2;
+// how far apart the frames asked by civue_window_wake are once one changed
+// nothing, and how far at most when they keep changing nothing.
+constexpr f64 WAKE_PACE = 1.0 / 60;
+constexpr f64 WAKE_PACE_MAX = 0.1;
 // how near the edge of the window a press resizes it, in points.
 constexpr f32 EDGE = 5;
 
@@ -111,6 +115,8 @@ static struct {
   civue_gfx *gfx;
   // a frame is wanted, drawn once the events are in.
   bool wanted;
+  // how long a wake waits after the last frame began, 0 for not at all.
+  f64 wake_pace;
   // the last frame showed nothing new, so no frame callback paces the next.
   bool unchanged;
   // a frame asked for at this time, 0 for none.
@@ -321,6 +327,23 @@ static _Atomic bool woken;
 
 static void want() {
   W.wanted = true;
+}
+
+static void schedule_timer(f64 at);
+
+// a frame asked from outside the window. the compositor's callback paces
+// the frames it is shown, and none comes for a frame that changed nothing:
+// an app told a hundred times a second of what its window does not show
+// would build as many frames. those come a display's frame apart, then
+// further while they keep changing nothing.
+static void woke() {
+  f64 due = W.began + W.wake_pace;
+  if (W.wake_pace > 0 && now_s() < due) {
+    schedule_timer(due);
+  }
+  else {
+    want();
+  }
 }
 
 void civue_window_buttons_hidden([[maybe_unused]] bool hidden) {
@@ -3094,6 +3117,10 @@ static void frame() {
   }
   ui->overlay_apart = past && !W.popup_refused && popup_ready();
   present(background, pw, ph, scale);
+  // a popup's frames are not told apart, they pace nothing.
+  W.wake_pace = W.unchanged && !ui->overlay_apart
+                  ? MIN(MAX(W.wake_pace * 2, WAKE_PACE), WAKE_PACE_MAX)
+                  : 0;
   if (ui->overlay_apart) {
     draw_popup(scale);
   }
@@ -3200,7 +3227,7 @@ static void pump(i32 ms) {
     run_calls();
   }
   if (atomic_exchange(&woken, false)) {
-    want();
+    woke();
   }
   for (u32 i = 0; n > 0 && i < nwatch; i++) {
     if (p[2 + i].revents & POLLIN) {
