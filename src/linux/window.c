@@ -14,6 +14,7 @@
 
 #include <errno.h>
 #include <gio/gio.h>
+#include <malloc.h>
 #include <math.h>
 #include <poll.h>
 #include <stdatomic.h>
@@ -44,6 +45,10 @@ constexpr f64 KEPT_FOR = 2;
 // nothing, and how far at most when they keep changing nothing.
 constexpr f64 WAKE_PACE = 1.0 / 60;
 constexpr f64 WAKE_PACE_MAX = 0.1;
+// the heap is trimmed before a wait of this many milliseconds at least, and
+// this many seconds apart at most.
+constexpr i32 HEAP_QUIET = 250;
+constexpr f64 HEAP_EVERY = 10;
 // how near the edge of the window a press resizes it, in points.
 constexpr f32 EDGE = 5;
 
@@ -117,6 +122,9 @@ static struct {
   bool wanted;
   // how long a wake waits after the last frame began, 0 for not at all.
   f64 wake_pace;
+  // a frame was built since the heap was last trimmed, and when it was.
+  bool built;
+  f64 heap_at;
   // the last frame showed nothing new, so no frame callback paces the next.
   bool unchanged;
   // a frame asked for at this time, 0 for none.
@@ -2460,6 +2468,25 @@ static void trim_buffers() {
   drop_buffers(false);
 }
 
+// what frames freed stays in glibc's heap, between what they kept. those
+// pages go back once the window is about to wait a while, `wait` in
+// milliseconds and -1 for as long as it takes: after a burst of frames, and
+// not more often than HEAP_EVERY for a window that keeps ticking.
+static void trim_heap(i32 wait) {
+#ifdef __GLIBC__
+  if (!W.built || (wait >= 0 && wait < HEAP_QUIET)) {
+    return;
+  }
+  f64 now = now_s();
+  if (now - W.heap_at < HEAP_EVERY) {
+    return;
+  }
+  W.built = false;
+  W.heap_at = now;
+  malloc_trim(0);
+#endif
+}
+
 typedef struct {
   Buffer *buffer;
   u32 cut;
@@ -3037,6 +3064,7 @@ static void draw_popup(f32 scale) {
 
 static void frame() {
   W.wanted = false;
+  W.built = true;
   W.began = now_s();
   u32 pw, ph;
   pixel_size(&pw, &ph);
@@ -3415,7 +3443,9 @@ void civue_window_run_sized(const civue_window_options *o,
   W.app_cb = make(W.ui, arg);
   want();
   for (;;) {
-    pump(next_wait());
+    i32 wait = next_wait();
+    trim_heap(wait);
+    pump(wait);
     repeat_keys();
     pthread_mutex_lock(&W.lock);
     char *layout = W.layout_next;
