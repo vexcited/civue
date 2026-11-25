@@ -8,6 +8,12 @@
 #include <arm_neon.h>
 #endif
 
+// sse2 is every x86-64's, and what a build for one processor has past it,
+// avx2 for one, is used where it is there.
+#ifdef __SSE2__
+#include <immintrin.h>
+#endif
+
 // ---- damage ----
 
 static bool empty(civue_box b) {
@@ -225,6 +231,14 @@ void civue_damage_each(const civue_damage *d, u32 width, u32 height,
   }
 }
 
+// ceilf of a value no farther from zero than a window is wide, without the
+// call it is where the processor has no instruction for it.
+static i32 up(f32 v) {
+  i32 whole = (i32)v;
+
+  return whole + ((f32)whole < v);
+}
+
 // the pixels whose centers are in x0 to x1 and y0 to y1, as the gpu fills
 // them, inside `limit`.
 static civue_box cover(f32 x0, f32 y0, f32 x1, f32 y1, civue_box limit) {
@@ -234,8 +248,7 @@ static civue_box cover(f32 x0, f32 y0, f32 x1, f32 y1, civue_box limit) {
   x0 = fminf(fmaxf(x0, lx0), lx1), x1 = fminf(fmaxf(x1, lx0), lx1);
   y0 = fminf(fmaxf(y0, ly0), ly1), y1 = fminf(fmaxf(y1, ly0), ly1);
 
-  civue_box b = {(i32)ceilf(x0 - 0.5f), (i32)ceilf(y0 - 0.5f),
-                 (i32)ceilf(x1 - 0.5f), (i32)ceilf(y1 - 0.5f)};
+  civue_box b = {up(x0 - 0.5f), up(y0 - 0.5f), up(x1 - 0.5f), up(y1 - 0.5f)};
 
   return cut(b, limit);
 }
@@ -254,6 +267,38 @@ static void geometry(const civue_quad *q, f32 g[4]) {
 
 // the pixels a quad may change inside `limit`.
 static civue_box bounds(const civue_quad *q, civue_box limit) {
+#if defined(__SSE2__) && !defined(__ARM_NEON)
+  // the four edges at once: asked of every quad of a frame, several times.
+  if (!turned(q)) {
+    __m128 rect = _mm_loadu_ps(q->rect), clip = _mm_loadu_ps(q->clip);
+    __m128 margin = _mm_set1_ps(
+      q->params[1] == CIVUE_QUAD_SHADOW ? q->params[2] * 3 : 0);
+    __m128 from = _mm_sub_ps(rect, margin);
+    __m128 to = _mm_add_ps(
+      _mm_add_ps(rect, _mm_movehl_ps(rect, rect)), margin);
+    // x0, y0, x1 and y1, the first two no less than the clip's and the last
+    // two no more.
+    __m128 g = _mm_movelh_ps(from, to);
+    __m128 inside = _mm_shuffle_ps(_mm_max_ps(g, clip), _mm_min_ps(g, clip),
+                                   _MM_SHUFFLE(3, 2, 1, 0));
+    __m128 low = _mm_setr_ps((f32)limit.x0, (f32)limit.y0, (f32)limit.x0,
+                             (f32)limit.y0);
+    __m128 high = _mm_setr_ps((f32)limit.x1, (f32)limit.y1, (f32)limit.x1,
+                              (f32)limit.y1);
+    __m128 v = _mm_sub_ps(_mm_min_ps(_mm_max_ps(inside, low), high),
+                          _mm_set1_ps(0.5f));
+    // rounded up: cut, and one more where that fell short.
+    __m128i whole = _mm_cvttps_epi32(v);
+
+    whole = _mm_sub_epi32(
+      whole, _mm_castps_si128(_mm_cmplt_ps(_mm_cvtepi32_ps(whole), v)));
+
+    civue_box b;
+    _mm_storeu_si128((__m128i *)(void *)&b, whole);
+    return cut(b, limit);
+  }
+#endif
+
   f32 g[4];
   geometry(q, g);
 
@@ -861,6 +906,30 @@ static u8 blending_of(const civue_batch *b) {
   return b->erase ? BLEND_ERASE : b->multiply ? BLEND_MULTIPLY : BLEND_OVER;
 }
 
+#if defined(__SSE2__) && !defined(__ARM_NEON)
+// a premultiplied color, blue first, over a pixel: the four channels at
+// once, rounded as `byte` does.
+static inline void blend_bgra(u8 *d, __m128 c) {
+  u32 was;
+  memcpy(&was, d, sizeof was);
+
+  __m128i zero = _mm_setzero_si128();
+  __m128 inv = _mm_sub_ps(_mm_set1_ps(1), _mm_shuffle_ps(c, c, 0xff));
+  __m128 over = _mm_mul_ps(c, _mm_set1_ps(255));
+  __m128i wide = _mm_unpacklo_epi16(
+    _mm_unpacklo_epi8(_mm_cvtsi32_si128((i32)was), zero), zero);
+  __m128 sum = _mm_add_ps(_mm_add_ps(over, _mm_mul_ps(_mm_cvtepi32_ps(wide), inv)),
+                          _mm_set1_ps(0.5f));
+  // cut toward zero, then kept in a byte: under zero and no number are 0.
+  __m128i narrow = _mm_cvttps_epi32(sum);
+
+  narrow = _mm_packs_epi32(narrow, narrow);
+  u32 now = (u32)_mm_cvtsi128_si32(_mm_packus_epi16(narrow, narrow));
+
+  memcpy(d, &now, sizeof now);
+}
+#endif
+
 static void blend(u8 *d, const f32 c[4], u8 blending) {
   f32 inv = 1 - c[3];
 
@@ -893,6 +962,9 @@ static void blend(u8 *d, const f32 c[4], u8 blending) {
 
     memcpy(d, &now, sizeof now);
     return;
+#elif defined(__SSE2__)
+    blend_bgra(d, _mm_setr_ps(c[2], c[1], c[0], c[3]));
+    return;
 #else
     d[0] = byte(c[2] * 255 + d[0] * inv);
     d[1] = byte(c[1] * 255 + d[1] * inv);
@@ -903,8 +975,8 @@ static void blend(u8 *d, const f32 c[4], u8 blending) {
   d[3] = byte(c[3] * 255 + d[3] * inv);
 }
 
-// `n` pixels set to `v`.
-static void fill(u8 *d, u32 n, u32 v) {
+// `n` pixels set to `v`. in the loop of every row that calls it.
+[[gnu::always_inline]] static inline void fill(u8 *d, u32 n, u32 v) {
   u32 i = 0;
 
 #ifdef __ARM_NEON
@@ -919,6 +991,32 @@ static void fill(u8 *d, u32 n, u32 v) {
 
   for (; i + 4 <= n; i += 4) {
     vst1q_u32((u32 *)(void *)(d + i * 4), lanes);
+  }
+#elif defined(__AVX2__)
+  __m256i lanes = _mm256_set1_epi32((i32)v);
+
+  for (; i + 32 <= n; i += 32) {
+    _mm256_storeu_si256((__m256i *)(void *)(d + i * 4), lanes);
+    _mm256_storeu_si256((__m256i *)(void *)(d + i * 4 + 32), lanes);
+    _mm256_storeu_si256((__m256i *)(void *)(d + i * 4 + 64), lanes);
+    _mm256_storeu_si256((__m256i *)(void *)(d + i * 4 + 96), lanes);
+  }
+
+  for (; i + 8 <= n; i += 8) {
+    _mm256_storeu_si256((__m256i *)(void *)(d + i * 4), lanes);
+  }
+#elif defined(__SSE2__)
+  __m128i lanes = _mm_set1_epi32((i32)v);
+
+  for (; i + 16 <= n; i += 16) {
+    _mm_storeu_si128((__m128i *)(void *)(d + i * 4), lanes);
+    _mm_storeu_si128((__m128i *)(void *)(d + i * 4 + 16), lanes);
+    _mm_storeu_si128((__m128i *)(void *)(d + i * 4 + 32), lanes);
+    _mm_storeu_si128((__m128i *)(void *)(d + i * 4 + 48), lanes);
+  }
+
+  for (; i + 4 <= n; i += 4) {
+    _mm_storeu_si128((__m128i *)(void *)(d + i * 4), lanes);
   }
 #endif
 
@@ -981,6 +1079,82 @@ static void span(const Raster *r, i32 y, i32 x0, i32 x1, const f32 c[4]) {
     uint16x8_t second = vcombine_u16(vqshrn_n_u32(e, 16), vqshrn_n_u32(f, 16));
 
     vst1q_u8(d + i * 4, vcombine_u8(vqmovn_u16(first), vqmovn_u16(second)));
+  }
+#elif defined(__SSE2__)
+  // sixteen bits a channel, eight or four pixels at a time. what is added
+  // is its whole part and its fraction apart, and the product its high and
+  // low halves: the sum's whole part is theirs and the carry of the low
+  // ones, the same as the 32 bits below give.
+  u16 whole[4], part[4];
+
+  for (u32 k = 0; k < 4; k++) {
+    whole[k] = (u16)(add[k] >> 16);
+    part[k] = (u16)(add[k] & 0xffff);
+  }
+
+  if (inv < ONE) {
+#ifdef __AVX2__
+    __m256i zero = _mm256_setzero_si256(), sign = _mm256_set1_epi16(-32768);
+    __m256i by = _mm256_set1_epi16((i16)inv);
+    __m256i wholes = _mm256_setr_epi16(
+      (i16)whole[0], (i16)whole[1], (i16)whole[2], (i16)whole[3],
+      (i16)whole[0], (i16)whole[1], (i16)whole[2], (i16)whole[3],
+      (i16)whole[0], (i16)whole[1], (i16)whole[2], (i16)whole[3],
+      (i16)whole[0], (i16)whole[1], (i16)whole[2], (i16)whole[3]);
+    __m256i parts = _mm256_setr_epi16(
+      (i16)part[0], (i16)part[1], (i16)part[2], (i16)part[3], (i16)part[0],
+      (i16)part[1], (i16)part[2], (i16)part[3], (i16)part[0], (i16)part[1],
+      (i16)part[2], (i16)part[3], (i16)part[0], (i16)part[1], (i16)part[2],
+      (i16)part[3]);
+    __m256i parts_signed = _mm256_xor_si256(parts, sign);
+
+    for (; i + 8 <= n; i += 8) {
+      __m256i px = _mm256_loadu_si256((const __m256i *)(const void *)(d + i * 4));
+      __m256i half[2] = {_mm256_unpacklo_epi8(px, zero),
+                         _mm256_unpackhi_epi8(px, zero)};
+
+      for (u32 h = 0; h < 2; h++) {
+        __m256i high = _mm256_mulhi_epu16(half[h], by);
+        __m256i low = _mm256_add_epi16(_mm256_mullo_epi16(half[h], by), parts);
+        // all ones where the low halves went past sixteen bits.
+        __m256i carry =
+          _mm256_cmpgt_epi16(parts_signed, _mm256_xor_si256(low, sign));
+
+        half[h] = _mm256_sub_epi16(_mm256_add_epi16(high, wholes), carry);
+      }
+
+      _mm256_storeu_si256((__m256i *)(void *)(d + i * 4),
+                          _mm256_packus_epi16(half[0], half[1]));
+    }
+#endif
+
+    __m128i zero4 = _mm_setzero_si128(), sign4 = _mm_set1_epi16(-32768);
+    __m128i by4 = _mm_set1_epi16((i16)inv);
+    __m128i wholes4 = _mm_setr_epi16(
+      (i16)whole[0], (i16)whole[1], (i16)whole[2], (i16)whole[3],
+      (i16)whole[0], (i16)whole[1], (i16)whole[2], (i16)whole[3]);
+    __m128i parts4 = _mm_setr_epi16(
+      (i16)part[0], (i16)part[1], (i16)part[2], (i16)part[3], (i16)part[0],
+      (i16)part[1], (i16)part[2], (i16)part[3]);
+    __m128i parts4_signed = _mm_xor_si128(parts4, sign4);
+
+    for (; i + 4 <= n; i += 4) {
+      __m128i px = _mm_loadu_si128((const __m128i *)(const void *)(d + i * 4));
+      __m128i half[2] = {_mm_unpacklo_epi8(px, zero4),
+                         _mm_unpackhi_epi8(px, zero4)};
+
+      for (u32 h = 0; h < 2; h++) {
+        __m128i high = _mm_mulhi_epu16(half[h], by4);
+        __m128i low = _mm_add_epi16(_mm_mullo_epi16(half[h], by4), parts4);
+        __m128i carry =
+          _mm_cmpgt_epi16(parts4_signed, _mm_xor_si128(low, sign4));
+
+        half[h] = _mm_sub_epi16(_mm_add_epi16(high, wholes4), carry);
+      }
+
+      _mm_storeu_si128((__m128i *)(void *)(d + i * 4),
+                       _mm_packus_epi16(half[0], half[1]));
+    }
   }
 #endif
 
@@ -1223,6 +1397,92 @@ static void blend_bgra(u8 *d, float32x4_t c) {
 
   memcpy(d, &now, sizeof now);
 }
+#elif defined(__SSE2__)
+// the same on x86: what shade_rect works out once for a quad.
+typedef struct {
+  f32 hx, hy, radii[4];
+  i32 border;
+  bool no_inside;
+  f32 ihx, ihy, icx, icy, iradii[4];
+  // blue, green, red and alpha, as the pixels have them.
+  __m128 color, edge;
+} RectShape;
+
+static RectShape rect_shape(const civue_quad *q) {
+  RectShape s = {
+    .hx = q->rect[2] * 0.5f,
+    .hy = q->rect[3] * 0.5f,
+    .color = _mm_setr_ps(q->color[2], q->color[1], q->color[0], q->color[3]),
+    .edge = _mm_setr_ps(q->border[2], q->border[1], q->border[0], q->border[3]),
+  };
+  f32 bw = q->params[0];
+
+  memcpy(s.radii, q->radii, sizeof s.radii);
+
+  if (bw < 0) {
+    f32 t[4];
+
+    for (u32 i = 0; i < 4; i++) {
+      t[i] = q->uv[i] == 0 ? -1 : q->uv[i];
+    }
+
+    s.border = -1;
+    s.ihx = fmaxf((q->rect[2] - (t[3] + t[1])) * 0.5f, 0);
+    s.ihy = fmaxf((q->rect[3] - (t[0] + t[2])) * 0.5f, 0);
+    s.icx = q->rect[0] + t[3] + s.ihx;
+    s.icy = q->rect[1] + t[0] + s.ihy;
+    s.no_inside = s.ihx <= 0 || s.ihy <= 0;
+
+    f32 wider[4] = {fmaxf(t[0], t[3]), fmaxf(t[0], t[1]), fmaxf(t[2], t[1]),
+                    fmaxf(t[2], t[3])};
+
+    for (u32 i = 0; i < 4; i++) {
+      s.iradii[i] = fmaxf(q->radii[i] - wider[i], 0);
+    }
+  }
+  else if (bw > 0) {
+    s.border = 1;
+    s.ihx = fmaxf(s.hx - bw, 0);
+    s.ihy = fmaxf(s.hy - bw, 0);
+
+    for (u32 i = 0; i < 4; i++) {
+      s.iradii[i] = fmaxf(q->radii[i] - bw, 0);
+    }
+  }
+
+  return s;
+}
+
+// `a` where `mask` is set, `b` elsewhere.
+static inline __m128 pick(__m128 mask, __m128 a, __m128 b) {
+  return _mm_or_ps(_mm_and_ps(mask, a), _mm_andnot_ps(mask, b));
+}
+
+static inline __m128 abs4(__m128 v) {
+  return _mm_andnot_ps(_mm_set1_ps(-0.0f), v);
+}
+
+// sd_rounded at four points.
+static inline __m128 sd_rounded4(__m128 px, __m128 py, f32 hx, f32 hy,
+                                 const f32 radii[4]) {
+  __m128 zero = _mm_setzero_ps();
+  __m128 right = _mm_cmpgt_ps(px, zero), below = _mm_cmpgt_ps(py, zero);
+  __m128 top = pick(right, _mm_set1_ps(radii[1]), _mm_set1_ps(radii[0]));
+  __m128 bottom = pick(right, _mm_set1_ps(radii[2]), _mm_set1_ps(radii[3]));
+  __m128 r = _mm_min_ps(pick(below, bottom, top), _mm_set1_ps(fminf(hx, hy)));
+  __m128 qx = _mm_add_ps(_mm_sub_ps(abs4(px), _mm_set1_ps(hx)), r);
+  __m128 qy = _mm_add_ps(_mm_sub_ps(abs4(py), _mm_set1_ps(hy)), r);
+  __m128 mx = _mm_max_ps(qx, zero), my = _mm_max_ps(qy, zero);
+  __m128 len = _mm_sqrt_ps(_mm_add_ps(_mm_mul_ps(mx, mx), _mm_mul_ps(my, my)));
+
+  return _mm_sub_ps(_mm_add_ps(_mm_min_ps(_mm_max_ps(qx, qy), zero), len), r);
+}
+
+static inline __m128 coverage4(__m128 sd) {
+  return _mm_min_ps(_mm_max_ps(_mm_sub_ps(_mm_set1_ps(0.5f), sd),
+                               _mm_setzero_ps()),
+                    _mm_set1_ps(1));
+}
 #endif
 
 // pixels x0 to x1 of a row of a rect, each asked: four at a time with neon.
@@ -1278,6 +1538,58 @@ static void rect_run(const Raster *r, const civue_quad *q, const void *shape,
       }
     }
   }
+#elif defined(__SSE2__)
+  const RectShape *s = shape;
+
+  if (s) {
+    f32 fy = (f32)y + 0.5f;
+    __m128 py = _mm_set1_ps(fy - q->rect[1] - s->hy);
+    __m128 iy = _mm_set1_ps(fy - s->icy);
+
+    for (; x + 4 <= x1; x += 4, d += 16) {
+      __m128 fx =
+        _mm_add_ps(_mm_set1_ps((f32)x), _mm_setr_ps(0.5f, 1.5f, 2.5f, 3.5f));
+      __m128 px =
+        _mm_sub_ps(_mm_sub_ps(fx, _mm_set1_ps(q->rect[0])), _mm_set1_ps(s->hx));
+      __m128 outer = coverage4(sd_rounded4(px, py, s->hx, s->hy, s->radii));
+      __m128 inner = _mm_set1_ps(1);
+
+      // nothing over the four leaves them as they were.
+      if (!_mm_movemask_ps(_mm_cmpneq_ps(outer, _mm_setzero_ps()))) {
+        continue;
+      }
+
+      if (s->border < 0) {
+        inner = s->no_inside
+                  ? _mm_setzero_ps()
+                  : coverage4(sd_rounded4(_mm_sub_ps(fx, _mm_set1_ps(s->icx)),
+                                          iy, s->ihx, s->ihy, s->iradii));
+      }
+      else if (s->border > 0) {
+        inner = coverage4(sd_rounded4(px, py, s->ihx, s->ihy, s->iradii));
+      }
+
+      f32 o[4], in[4];
+      _mm_storeu_ps(o, outer);
+      _mm_storeu_ps(in, inner);
+
+      for (u32 i = 0; i < 4; i++) {
+        // nothing over the pixel leaves it as it was.
+        if (o[i] == 0) {
+          continue;
+        }
+
+        __m128 c = s->border
+                     ? _mm_mul_ps(
+                         _mm_add_ps(_mm_mul_ps(s->edge, _mm_set1_ps(1 - in[i])),
+                                    _mm_mul_ps(s->color, _mm_set1_ps(in[i]))),
+                         _mm_set1_ps(o[i]))
+                     : _mm_mul_ps(s->color, _mm_set1_ps(o[i]));
+
+        blend_bgra(d + i * 4, c);
+      }
+    }
+  }
 #else
   (void)shape;
 #endif
@@ -1293,7 +1605,7 @@ static void whole_span(const civue_quad *q, f32 cy, i32 *from, i32 *to);
 
 static void rect_quad(const Raster *r, const civue_quad *q, civue_box b) {
   Flat f = flat(q);
-#ifdef __ARM_NEON
+#if defined(__ARM_NEON) || defined(__SSE2__)
   // pixel grids and multiplying are asked a pixel at a time.
   RectShape shape;
   const void *vector = nullptr;
@@ -1503,6 +1815,118 @@ static bool none_x16(uint8x16_t m) {
 }
 #endif
 
+#if defined(__SSE2__) && !defined(__ARM_NEON)
+// x over 255, rounded, for each x up to 65279, in sixteen bits.
+static inline __m128i div255_x8(__m128i x) {
+  x = _mm_add_epi16(x, _mm_set1_epi16(128));
+  return _mm_srli_epi16(_mm_add_epi16(x, _mm_srli_epi16(x, 8)), 8);
+}
+
+// how many pixels of coverage are tinted at a time.
+#ifdef __AVX2__
+constexpr u32 MASK_STEP = 8;
+
+static inline __m256i div255_x16(__m256i x) {
+  x = _mm256_add_epi16(x, _mm256_set1_epi16(128));
+  return _mm256_srli_epi16(_mm256_add_epi16(x, _mm256_srli_epi16(x, 8)), 8);
+}
+
+// eight pixels of coverage `m`, a byte each, tinted `tint` over `d`: mask
+// pixel's own math, sixteen bits a channel. `tint` is the color blue first
+// four times over, and `alpha` its alpha in every lane.
+static inline void mask_step(u8 *d, u64 m, __m256i tint, __m256i alpha) {
+  __m256i zero = _mm256_setzero_si256();
+  // each coverage four times, a channel each.
+  __m128i twice = _mm_cvtsi64_si128((i64)m);
+
+  twice = _mm_unpacklo_epi8(twice, twice);
+
+  __m256i a = _mm256_set_m128i(_mm_unpackhi_epi16(twice, twice),
+                               _mm_unpacklo_epi16(twice, twice));
+  __m256i px = _mm256_loadu_si256((const __m256i *)(const void *)d);
+  __m256i half[2] = {_mm256_unpacklo_epi8(px, zero),
+                     _mm256_unpackhi_epi8(px, zero)};
+  __m256i cover[2] = {_mm256_unpacklo_epi8(a, zero),
+                      _mm256_unpackhi_epi8(a, zero)};
+
+  for (u32 h = 0; h < 2; h++) {
+    __m256i inv = _mm256_sub_epi16(
+      _mm256_set1_epi16(255),
+      div255_x16(_mm256_mullo_epi16(alpha, cover[h])));
+
+    half[h] = div255_x16(_mm256_add_epi16(_mm256_mullo_epi16(tint, cover[h]),
+                                          _mm256_mullo_epi16(half[h], inv)));
+  }
+
+  _mm256_storeu_si256((__m256i *)(void *)d,
+                      _mm256_packus_epi16(half[0], half[1]));
+}
+
+#define MASK_TINT(c)                                                        \
+  const __m256i tint_color = _mm256_setr_epi16(                             \
+    c[0], c[1], c[2], c[3], c[0], c[1], c[2], c[3], c[0], c[1], c[2], c[3], \
+    c[0], c[1], c[2], c[3]);                                                \
+  const __m256i tint_alpha = _mm256_set1_epi16(c[3])
+#else
+constexpr u32 MASK_STEP = 4;
+
+// four pixels of coverage, as above.
+static inline void mask_step(u8 *d, u64 m, __m128i tint, __m128i alpha) {
+  __m128i zero = _mm_setzero_si128();
+  __m128i a = _mm_cvtsi32_si128((i32)(u32)m);
+
+  a = _mm_unpacklo_epi8(a, a);
+  a = _mm_unpacklo_epi16(a, a);
+
+  __m128i px = _mm_loadu_si128((const __m128i *)(const void *)d);
+  __m128i half[2] = {_mm_unpacklo_epi8(px, zero), _mm_unpackhi_epi8(px, zero)};
+  __m128i cover[2] = {_mm_unpacklo_epi8(a, zero), _mm_unpackhi_epi8(a, zero)};
+
+  for (u32 h = 0; h < 2; h++) {
+    __m128i inv = _mm_sub_epi16(_mm_set1_epi16(255),
+                                div255_x8(_mm_mullo_epi16(alpha, cover[h])));
+
+    half[h] = div255_x8(_mm_add_epi16(_mm_mullo_epi16(tint, cover[h]),
+                                      _mm_mullo_epi16(half[h], inv)));
+  }
+
+  _mm_storeu_si128((__m128i *)(void *)d, _mm_packus_epi16(half[0], half[1]));
+}
+
+#define MASK_TINT(c)                                              \
+  const __m128i tint_color =                                      \
+    _mm_setr_epi16(c[0], c[1], c[2], c[3], c[0], c[1], c[2], c[3]); \
+  const __m128i tint_alpha = _mm_set1_epi16(c[3])
+#endif
+
+// the coverage of MASK_STEP pixels read at once, and what the gamma makes
+// of each.
+static inline u64 mask_read(const u8 *m) {
+  u64 v = 0;
+
+  memcpy(&v, m, MASK_STEP);
+  return v;
+}
+
+static inline u64 mask_gamma(u64 m, const u8 *table) {
+  // nothing and all of a pixel stay what they are whatever the gamma, and
+  // are most of what is not a glyph's edge.
+  u64 full = ((m >> 7) & 0x0101010101010101u) * 0xff;
+
+  if (m == full) {
+    return m;
+  }
+
+  u64 v = 0;
+
+  for (u32 k = 0; k < MASK_STEP; k++) {
+    v |= (u64)table[(m >> (k * 8)) & 0xff] << (k * 8);
+  }
+
+  return v;
+}
+#endif
+
 // a pixel of coverage `a` tinted `c`, blue first, over `p`.
 static void mask_pixel(u8 *p, u32 a, const u8 c[4]) {
   u32 inv = 255 - div255(c[3] * a);
@@ -1532,6 +1956,14 @@ static void mask_quad(const Raster *r, const civue_quad *q, civue_box b) {
   // left as they are: only where the surface and the atlas have them.
   bool wide = b.x0 + ((n + 15) & ~15u) <= r->s->width &&
               b.x0 + u + ((n + 15) & ~15u) <= CIVUE_ATLAS_SIZE;
+#elif defined(__SSE2__)
+  MASK_TINT(c);
+  bool plain = gamma == 1;
+  u32 whole_steps = (n + MASK_STEP - 1) & ~(MASK_STEP - 1);
+  // a step is read and written whole, the pixels past the row left as they
+  // are: only where the surface and the atlas have them.
+  bool wide = b.x0 + whole_steps <= r->s->width &&
+              b.x0 + u + whole_steps <= CIVUE_ATLAS_SIZE;
 #endif
 
   for (i32 y = b.y0; y < b.y1; y++) {
@@ -1553,6 +1985,28 @@ static void mask_quad(const Raster *r, const civue_quad *q, civue_box b) {
 
       if (!none_x16(lanes)) {
         MASK_X16(d + i * 4, lanes);
+      }
+
+      continue;
+    }
+#elif defined(__SSE2__)
+    for (; i + MASK_STEP <= n; i += MASK_STEP) {
+      u64 lanes = mask_read(m + i);
+
+      // most of a glyph's box is nothing.
+      if (lanes) {
+        mask_step(d + i * 4, plain ? lanes : mask_gamma(lanes, table),
+                  tint_color, tint_alpha);
+      }
+    }
+
+    if (i < n && wide) {
+      // the pixels past the row have no coverage, and are left as they are.
+      u64 lanes = mask_read(m + i) & (((u64)1 << ((n - i) * 8)) - 1);
+
+      if (lanes) {
+        mask_step(d + i * 4, plain ? lanes : mask_gamma(lanes, table),
+                  tint_color, tint_alpha);
       }
 
       continue;
@@ -1583,8 +2037,51 @@ static void color_quad(const Raster *r, const civue_quad *q, civue_box b) {
     const u8 *t =
       r->color + ((usize)(y + v) * CIVUE_ATLAS_SIZE + (b.x0 + u)) * 4;
     u8 *d = pixel(r->s, b.x0, y);
+    i32 x = b.x0;
 
-    for (i32 x = b.x0; x < b.x1; x++, t += 4, d += 4) {
+#if defined(__SSE2__) && !defined(__ARM_NEON)
+    // four pixels at a time, sixteen bits a channel: the math below.
+    __m128i zero = _mm_setzero_si128(), by = _mm_set1_epi16((i16)opacity);
+    __m128i full = _mm_set1_epi16(255), even = _mm_set1_epi32(0x00ff00ff);
+
+    for (; x + 4 <= b.x1; x += 4, t += 16, d += 16) {
+      __m128i texels = _mm_loadu_si128((const __m128i *)(const void *)t);
+
+      // most of an emoji's box is nothing.
+      if (_mm_movemask_epi8(_mm_cmpeq_epi8(texels, zero)) == 0xffff) {
+        continue;
+      }
+
+      // red and blue change places.
+      __m128i ends = _mm_and_si128(texels, even);
+
+      texels = _mm_or_si128(
+        _mm_andnot_si128(even, texels),
+        _mm_or_si128(_mm_slli_epi32(ends, 16), _mm_srli_epi32(ends, 16)));
+
+      __m128i px = _mm_loadu_si128((const __m128i *)(const void *)d);
+      __m128i src[2] = {_mm_unpacklo_epi8(texels, zero),
+                        _mm_unpackhi_epi8(texels, zero)};
+      __m128i dst[2] = {_mm_unpacklo_epi8(px, zero),
+                        _mm_unpackhi_epi8(px, zero)};
+
+      for (u32 h = 0; h < 2; h++) {
+        __m128i over = div255_x8(_mm_mullo_epi16(src[h], by));
+        // each pixel's alpha in its four lanes.
+        __m128i alpha =
+          _mm_shufflehi_epi16(_mm_shufflelo_epi16(over, 0xff), 0xff);
+        __m128i under =
+          div255_x8(_mm_mullo_epi16(dst[h], _mm_sub_epi16(full, alpha)));
+
+        dst[h] = _mm_add_epi16(over, under);
+      }
+
+      _mm_storeu_si128((__m128i *)(void *)d,
+                       _mm_packus_epi16(dst[0], dst[1]));
+    }
+#endif
+
+    for (; x < b.x1; x++, t += 4, d += 4) {
       // the atlas has red first, the pixels blue.
       u32 s[4] = {div255(t[2] * opacity), div255(t[1] * opacity),
                   div255(t[0] * opacity), div255(t[3] * opacity)};
@@ -1629,6 +2126,21 @@ static void erf_x4(const f32 x[4], f32 out[4]) {
   float32x4_t m = vsubq_f32(one, vdivq_f32(one, r));
   // the sign of x.
   vst1q_f32(out, vbslq_f32(vdupq_n_u32(0x80000000u), v, m));
+#elif defined(__SSE2__)
+  __m128 sign = _mm_set1_ps(-0.0f), one = _mm_set1_ps(1);
+  __m128 v = _mm_loadu_ps(x), a = _mm_andnot_ps(sign, v);
+  __m128 r = _mm_add_ps(_mm_set1_ps(0.230389f),
+                        _mm_mul_ps(_mm_set1_ps(0.078108f), _mm_mul_ps(a, a)));
+
+  r = _mm_add_ps(_mm_set1_ps(0.278393f), _mm_mul_ps(r, a));
+  r = _mm_add_ps(one, _mm_mul_ps(r, a));
+  r = _mm_mul_ps(r, r);
+  r = _mm_mul_ps(r, r);
+
+  __m128 m = _mm_sub_ps(one, _mm_div_ps(one, r));
+  // the sign of x, and nothing at zero as erf_of has it.
+  m = _mm_or_ps(m, _mm_and_ps(sign, v));
+  _mm_storeu_ps(out, _mm_and_ps(m, _mm_cmpneq_ps(v, _mm_setzero_ps())));
 #else
   for (u32 i = 0; i < 4; i++) {
     out[i] = erf_of(x[i]);
@@ -2078,6 +2590,29 @@ static void image_quad(const Raster *r, const civue_quad *q, civue_box b) {
         }
 
         vst1q_u8(d, vqtbl1q_u8(t, swap));
+      }
+#elif defined(__SSE2__)
+      __m128i even = _mm_set1_epi32(0x00ff00ff);
+      __m128i alpha = _mm_set1_epi32((i32)0xff000000u);
+
+      for (; x + 4 <= e; x += 4, d += 16) {
+        __m128i t = _mm_loadu_si128(
+          (const __m128i *)(const void *)(row + (usize)(x + ox) * 4));
+
+        // see through somewhere: blended a pixel at a time below.
+        if (_mm_movemask_epi8(_mm_cmpeq_epi8(_mm_and_si128(t, alpha), alpha)) !=
+            0xffff) {
+          break;
+        }
+
+        // red and blue change places.
+        __m128i ends = _mm_and_si128(t, even);
+
+        _mm_storeu_si128(
+          (__m128i *)(void *)d,
+          _mm_or_si128(
+            _mm_andnot_si128(even, t),
+            _mm_or_si128(_mm_slli_epi32(ends, 16), _mm_srli_epi32(ends, 16))));
       }
 #endif
     }
