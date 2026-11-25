@@ -1025,6 +1025,37 @@ static void blend(u8 *d, const f32 c[4], u8 blending) {
   }
 }
 
+// `n` pixels set to `v` in memory that is far from the processor's caches
+// and will not be read back soon: written past them, which spares reading
+// each line before it is written whole. x86 has to be told. the arm cores
+// that can do it see a long fill by themselves, so theirs is a plain one.
+#ifdef __SSE2__
+static void fill_far(u8 *d, u32 n, u32 v) {
+  u32 i = 0;
+
+  // up to a line's start, then a line at a time.
+  while (i < n && ((uintptr_t)(d + i * 4) & 63)) {
+    memcpy(d + i * 4, &v, sizeof v);
+    i++;
+  }
+
+  __m128i lanes = _mm_set1_epi32((i32)v);
+
+  for (; i + 16 <= n; i += 16) {
+    _mm_stream_si128((__m128i *)(void *)(d + i * 4), lanes);
+    _mm_stream_si128((__m128i *)(void *)(d + i * 4 + 16), lanes);
+    _mm_stream_si128((__m128i *)(void *)(d + i * 4 + 32), lanes);
+    _mm_stream_si128((__m128i *)(void *)(d + i * 4 + 48), lanes);
+  }
+
+  fill(d + i * 4, n - i, v);
+}
+#else
+[[gnu::always_inline]] static inline void fill_far(u8 *d, u32 n, u32 v) {
+  fill(d, n, v);
+}
+#endif
+
 // one color over a row's pixels from x0 to x1.
 static void span(const Raster *r, i32 y, i32 x0, i32 x1, const f32 c[4]) {
   if (x0 >= x1) {
@@ -1605,6 +1636,16 @@ static void whole_span(const civue_quad *q, f32 cy, i32 *from, i32 *to);
 
 static void rect_quad(const Raster *r, const civue_quad *q, civue_box b) {
   Flat f = flat(q);
+#ifdef __SSE2__
+  // a fill of this many pixels is larger than the caches near a core: what
+  // it writes is on its way out of them before the fill ends, and an opaque
+  // rect that large is written past them.
+  constexpr i64 FAR_PIXELS = 1 << 17;
+  bool far = !r->blending && q->color[3] >= 1 && area(b) >= FAR_PIXELS;
+#else
+  constexpr bool far = false;
+#endif
+  u32 far_color = 0;
 #if defined(__ARM_NEON) || defined(__SSE2__)
   // pixel grids and multiplying are asked a pixel at a time.
   RectShape shape;
@@ -1623,6 +1664,10 @@ static void rect_quad(const Raster *r, const civue_quad *q, civue_box b) {
 
   if (has_inside) {
     memcpy(inside, q->color, sizeof inside);
+
+    u8 p[4] = {byte(inside[2] * 255), byte(inside[1] * 255),
+               byte(inside[0] * 255), 255};
+    memcpy(&far_color, p, sizeof far_color);
   }
 
   for (i32 y = b.y0; y < b.y1; y++) {
@@ -1654,7 +1699,7 @@ static void rect_quad(const Raster *r, const civue_quad *q, civue_box b) {
     if (a < e) {
       f32 c[4];
 
-      if (y + AHEAD < b.y1) {
+      if (y + AHEAD < b.y1 && !far) {
         ask_row(r, (civue_box){a, y, e, y + 1}, y + AHEAD);
       }
 
@@ -1666,9 +1711,18 @@ static void rect_quad(const Raster *r, const civue_quad *q, civue_box b) {
         if (!has_inside) {
           shade_rect(q, from + 0.5f, (f32)y + 0.5f, inside);
           has_inside = true;
+
+          u8 p[4] = {byte(inside[2] * 255), byte(inside[1] * 255),
+                     byte(inside[0] * 255), 255};
+          memcpy(&far_color, p, sizeof far_color);
         }
 
-        span(r, y, a, e, inside);
+        if (far && inside[3] >= 1) {
+          fill_far(pixel(r->s, a, y), (u32)(e - a), far_color);
+        }
+        else {
+          span(r, y, a, e, inside);
+        }
       }
     }
 
@@ -2699,7 +2753,12 @@ static void clear_boxes(Clears *c) {
         }
       }
 
-      fill(pixel(c->r->s, b.x0, y), (u32)(b.x1 - b.x0), c->r->clear);
+      if (c->whole) {
+        fill_far(pixel(c->r->s, b.x0, y), (u32)(b.x1 - b.x0), c->r->clear);
+      }
+      else {
+        fill(pixel(c->r->s, b.x0, y), (u32)(b.x1 - b.x0), c->r->clear);
+      }
     }
   }
 
@@ -3005,6 +3064,11 @@ void civue_raster(const civue_surface *s, const civue_draw_list *list,
   else if (damage->any) {
     draw_tiles(&r, list, damage);
   }
+
+#ifdef __SSE2__
+  // what was written past the caches is in memory before anyone reads it.
+  _mm_sfence();
+#endif
 }
 
 // what a pixel asked to the shader's math takes, next to one filled, and
