@@ -402,6 +402,25 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(civue PUBLIC
     PkgConfig::CIVUE_DEPS Threads::Threads m)
 
+  # png, jpeg and webp are decoded by their own libraries where they are
+  # installed, in this process. gdk-pixbuf reads the rest, and those too
+  # without them, each image in a process of its own.
+  pkg_check_modules(CIVUE_PNG IMPORTED_TARGET libpng)
+  pkg_check_modules(CIVUE_JPEG IMPORTED_TARGET libturbojpeg>=3)
+  pkg_check_modules(CIVUE_WEBP IMPORTED_TARGET libwebp libwebpdemux)
+  # an image in a color profile of its own is moved to srgb by little cms,
+  # and left to gdk-pixbuf without it.
+  pkg_check_modules(CIVUE_LCMS IMPORTED_TARGET lcms2)
+
+  foreach(format PNG JPEG WEBP LCMS)
+    if(CIVUE_${format}_FOUND)
+      target_link_libraries(civue PUBLIC PkgConfig::CIVUE_${format})
+      target_compile_definitions(civue PRIVATE CIVUE_${format})
+    else()
+      message(STATUS "civue: no library for ${format}, gdk-pixbuf reads it")
+    endif()
+  endforeach()
+
   # videos play through gstreamer where it is installed.
   pkg_check_modules(CIVUE_GSTREAMER IMPORTED_TARGET
     gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0)
