@@ -421,13 +421,43 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     endif()
   endforeach()
 
+  # civue_lazy_library(<target> <prefix> <pattern>) has <target> compile
+  # against the pkg-config modules found as <prefix> without linking them:
+  # the libraries whose names match <pattern> are opened by src/linux/lazy.c
+  # when they are first used, by the sonames written here as
+  # <prefix>_LIBRARIES in civue_lazy_libraries.h.
+  set(CIVUE_LAZY_HEADER ${CMAKE_CURRENT_BINARY_DIR}/lazy/civue_lazy_libraries.h)
+  file(WRITE ${CIVUE_LAZY_HEADER}.new "")
+  function(civue_lazy_library target prefix pattern)
+    set(names)
+    foreach(lib ${${prefix}_LINK_LIBRARIES})
+      get_filename_component(real ${lib} REALPATH)
+      get_filename_component(file ${real} NAME)
+      if(file MATCHES "^(lib(${pattern})[^/]*\\.so\\.[0-9]+)")
+        list(APPEND names "\"${CMAKE_MATCH_1}\"")
+      endif()
+    endforeach()
+    if(NOT names)
+      message(FATAL_ERROR "civue: no library of ${prefix} to open")
+    endif()
+    list(JOIN names ", " joined)
+    file(APPEND ${CIVUE_LAZY_HEADER}.new
+      "#define ${prefix}_LIBRARIES ${joined}\n")
+    target_include_directories(${target} SYSTEM PRIVATE
+      ${${prefix}_INCLUDE_DIRS})
+    target_compile_options(${target} PRIVATE ${${prefix}_CFLAGS_OTHER})
+  endfunction()
+  target_sources(civue PRIVATE src/linux/lazy.c)
+  target_include_directories(civue PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/lazy)
+  target_link_libraries(civue PUBLIC ${CMAKE_DL_LIBS})
+
   # videos play through gstreamer where it is installed.
   pkg_check_modules(CIVUE_GSTREAMER IMPORTED_TARGET
     gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0)
 
   if(CIVUE_GSTREAMER_FOUND)
     target_sources(civue PRIVATE src/linux/video.c)
-    target_link_libraries(civue PUBLIC PkgConfig::CIVUE_GSTREAMER)
+    civue_lazy_library(civue CIVUE_GSTREAMER "gst(reamer|app|video)-")
   else()
     message(STATUS "civue: no gstreamer, videos are left out")
     target_sources(civue PRIVATE src/linux/novideo.c)
@@ -438,11 +468,15 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 
   if(CIVUE_WPE_FOUND)
     target_sources(civue PRIVATE src/linux/webview.c)
-    target_link_libraries(civue PUBLIC PkgConfig::CIVUE_WPE)
+    civue_lazy_library(civue CIVUE_WPE "WPE(WebKit|Platform)-")
   else()
     message(STATUS "civue: no wpe webkit, web views are left out")
     target_sources(civue PRIVATE src/linux/nowebview.c)
   endif()
+
+  # written once every library is known, and only when it changed.
+  execute_process(COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${CIVUE_LAZY_HEADER}.new ${CIVUE_LAZY_HEADER})
 
   # the wayland protocols past the core one, their client code generated.
   pkg_get_variable(CIVUE_SCANNER_PATH wayland-scanner wayland_scanner)

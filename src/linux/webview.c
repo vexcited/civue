@@ -1,11 +1,93 @@
+#include "lazy.h"
 #include "wl.h"
 
 #include <civue/gfx.h>
 #include <civue/webview.h>
 
+#include <civue_lazy_libraries.h>
 #include <math.h>
 #include <wpe/webkit.h>
 #include <wpe/wpe-platform.h>
+
+// wpe webkit and its platform are taken by the first web view: every one
+// of their functions called here.
+#define WPE_FUNCTIONS(X)                                          \
+  X(jsc_value_is_string)                                          \
+  X(jsc_value_to_string)                                          \
+  X(webkit_cookie_manager_set_persistent_storage)                 \
+  X(webkit_navigation_action_get_navigation_type)                 \
+  X(webkit_navigation_action_get_request)                         \
+  X(webkit_navigation_policy_decision_get_navigation_action)      \
+  X(webkit_network_error_quark)                                   \
+  X(webkit_network_session_get_cookie_manager)                    \
+  X(webkit_network_session_new)                                   \
+  X(webkit_policy_decision_ignore)                                \
+  X(webkit_policy_error_quark)                                    \
+  X(webkit_settings_new)                                          \
+  X(webkit_settings_set_user_agent)                               \
+  X(webkit_uri_request_get_uri)                                   \
+  X(webkit_user_content_manager_add_script)                       \
+  X(webkit_user_content_manager_new)                              \
+  X(webkit_user_content_manager_register_script_message_handler)  \
+  X(webkit_user_script_new)                                       \
+  X(webkit_user_script_unref)                                     \
+  X(webkit_web_view_evaluate_javascript)                          \
+  X(webkit_web_view_get_type)                                     \
+  X(webkit_web_view_get_uri)                                      \
+  X(webkit_web_view_get_user_content_manager)                     \
+  X(webkit_web_view_get_wpe_view)                                 \
+  X(webkit_web_view_load_html)                                    \
+  X(webkit_web_view_load_uri)                                     \
+  X(webkit_web_view_set_background_color)                         \
+  X(webkit_web_view_stop_loading)                                 \
+  X(wpe_buffer_get_height)                                        \
+  X(wpe_buffer_get_width)                                         \
+  X(wpe_buffer_import_to_pixels)                                  \
+  X(wpe_buffer_shm_get_stride)                                    \
+  X(wpe_buffer_shm_get_type)                                      \
+  X(wpe_display_connect)                                          \
+  X(wpe_display_get_type)                                         \
+  X(wpe_event_keyboard_new)                                       \
+  X(wpe_event_pointer_button_new)                                 \
+  X(wpe_event_pointer_move_new)                                   \
+  X(wpe_event_scroll_new)                                         \
+  X(wpe_event_unref)                                              \
+  X(wpe_keymap_get_entries_for_keyval)                            \
+  X(wpe_keymap_xkb_new)                                           \
+  X(wpe_toplevel_get_type)                                        \
+  X(wpe_toplevel_resized)                                         \
+  X(wpe_toplevel_scale_changed)                                   \
+  X(wpe_toplevel_state_changed)                                   \
+  X(wpe_unicode_to_keyval)                                        \
+  X(wpe_view_buffer_released)                                     \
+  X(wpe_view_buffer_rendered)                                     \
+  X(wpe_view_compute_press_count)                                 \
+  X(wpe_view_event)                                               \
+  X(wpe_view_focus_in)                                            \
+  X(wpe_view_focus_out)                                           \
+  X(wpe_view_get_toplevel)                                        \
+  X(wpe_view_get_type)                                            \
+  X(wpe_view_map)                                                 \
+  X(wpe_view_resized)                                             \
+  X(wpe_view_set_toplevel)                                        \
+  X(wpe_view_set_visible)
+
+WPE_FUNCTIONS(CIVUE_LAZY_FUNCTION)
+
+// whether wpe webkit is there, asked once.
+static bool wpe_loaded() {
+  static const char *const libraries[] = {CIVUE_WPE_LIBRARIES, nullptr};
+  static const civue__lazy_symbol symbols[] = {
+    WPE_FUNCTIONS(CIVUE_LAZY_SYMBOL)};
+  static bool asked, loaded;
+
+  if (!asked) {
+    asked = true;
+    loaded = civue__lazy_load(libraries, symbols, countof(symbols));
+  }
+
+  return loaded;
+}
 
 // how often the page is told its picture was shown, in milliseconds: it
 // paints the next one no sooner.
@@ -419,6 +501,11 @@ static void place(u64 frame) {
 }
 
 civue_webview *civue_webview_new(const civue_webview_options *o) {
+  // a system that lost wpe webkit since the build has no web views.
+  if (!wpe_loaded()) {
+    return nullptr;
+  }
+
   civue_webview *w = own_new(sizeof(civue_webview));
   w->ctx = o->ctx;
   w->message = o->message;

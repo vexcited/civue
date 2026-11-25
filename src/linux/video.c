@@ -1,14 +1,47 @@
-#include "../internal.h"
+#include "lazy.h"
 
 #include <civue/gfx.h>
 #include <civue/video.h>
 #include <civue/window.h>
 
+#include <civue_lazy_libraries.h>
 #include <gst/app/gstappsink.h>
 #include <gst/gst.h>
 #include <gst/video/video.h>
 #include <math.h>
 #include <pthread.h>
+
+// gstreamer is taken by the first video: every one of its functions called
+// here.
+#define GST_FUNCTIONS(X)              \
+  X(gst_app_sink_pull_preroll)        \
+  X(gst_app_sink_pull_sample)         \
+  X(gst_app_sink_set_callbacks)       \
+  X(gst_bus_pop)                      \
+  X(gst_bus_set_sync_handler)         \
+  X(gst_caps_new_simple)              \
+  X(gst_element_factory_make)         \
+  X(gst_element_get_bus)              \
+  X(gst_element_query)                \
+  X(gst_element_query_duration)       \
+  X(gst_element_query_position)       \
+  X(gst_element_seek_simple)          \
+  X(gst_element_set_state)            \
+  X(gst_init_check)                   \
+  X(gst_is_initialized)               \
+  X(gst_message_parse_buffering)      \
+  X(gst_message_parse_error)          \
+  X(gst_mini_object_unref)            \
+  X(gst_object_unref)                 \
+  X(gst_query_new_buffering)          \
+  X(gst_query_parse_buffering_range)  \
+  X(gst_sample_get_buffer)            \
+  X(gst_sample_get_caps)              \
+  X(gst_video_frame_map)              \
+  X(gst_video_frame_unmap)            \
+  X(gst_video_info_from_caps)
+
+GST_FUNCTIONS(CIVUE_LAZY_FUNCTION)
 
 // playbin's flags, which its header keeps to itself: the picture, the sound,
 // the volume done in software, and a download kept on disk as it plays.
@@ -38,8 +71,16 @@ struct civue_video {
   u32 width, height;
 };
 
+// whether gstreamer is there and started.
+static bool gst_loaded;
+
 static void start_gst() {
-  gst_init_check(nullptr, nullptr, nullptr);
+  static const char *const libraries[] = {CIVUE_GSTREAMER_LIBRARIES, nullptr};
+  static const civue__lazy_symbol symbols[] = {
+    GST_FUNCTIONS(CIVUE_LAZY_SYMBOL)};
+
+  gst_loaded = civue__lazy_load(libraries, symbols, countof(symbols)) &&
+               gst_init_check(nullptr, nullptr, nullptr);
 }
 
 // a picture is due: kept for the frame the window is asked for. on a
@@ -87,7 +128,7 @@ civue_video *civue_video_new(const char *url, const civue_video_options *o) {
   static pthread_once_t once = PTHREAD_ONCE_INIT;
   pthread_once(&once, start_gst);
 
-  if (!url || !gst_is_initialized()) {
+  if (!url || !gst_loaded || !gst_is_initialized()) {
     return nullptr;
   }
 
