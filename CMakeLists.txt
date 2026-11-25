@@ -487,9 +487,11 @@ target_include_directories(civue PUBLIC
 target_compile_options(civue PUBLIC
   "$<$<COMPILE_LANGUAGE:C,OBJC>:${CIVUE_C2Y}>")
 target_link_libraries(civue PUBLIC cilo::cilo)
+# nothing here reads errno after a square root or traps on a float, and
+# without the promise of either a sqrtf is a call into libm on linux.
 target_compile_options(civue PRIVATE
-  -fno-strict-aliasing -Wall -Wextra -Wno-unused-parameter
-  -Wno-missing-field-initializers -Wno-sign-compare)
+  -fno-strict-aliasing -fno-math-errno -fno-trapping-math -Wall -Wextra
+  -Wno-unused-parameter -Wno-missing-field-initializers -Wno-sign-compare)
 set_target_properties(civue PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # each example is a project of its own, built here against this civue.
