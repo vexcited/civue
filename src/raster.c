@@ -297,6 +297,29 @@ static civue_box bounds(const civue_quad *q, civue_box limit) {
     _mm_storeu_si128((__m128i *)(void *)&b, whole);
     return cut(b, limit);
   }
+#elif defined(__ARM_NEON) && defined(__aarch64__)
+  // the same with neon, which rounds up as it converts.
+  if (!turned(q)) {
+    float32x4_t rect = vld1q_f32(q->rect), clip = vld1q_f32(q->clip);
+    float32x2_t margin =
+      vdup_n_f32(q->params[1] == CIVUE_QUAD_SHADOW ? q->params[2] * 3 : 0);
+    float32x2_t at = vget_low_f32(rect), size = vget_high_f32(rect);
+    float32x4_t g = vcombine_f32(vsub_f32(at, margin),
+                                 vadd_f32(vadd_f32(at, size), margin));
+    // the larger and the smaller as fmaxf and fminf give them.
+    float32x4_t inside = vcombine_f32(vget_low_f32(vmaxnmq_f32(g, clip)),
+                                      vget_high_f32(vminnmq_f32(g, clip)));
+    float32x2_t low = {(f32)limit.x0, (f32)limit.y0};
+    float32x2_t high = {(f32)limit.x1, (f32)limit.y1};
+    float32x4_t v =
+      vsubq_f32(vminnmq_f32(vmaxnmq_f32(inside, vcombine_f32(low, low)),
+                            vcombine_f32(high, high)),
+                vdupq_n_f32(0.5f));
+
+    civue_box b;
+    vst1q_s32((i32 *)(void *)&b, vcvtpq_s32_f32(v));
+    return cut(b, limit);
+  }
 #endif
 
   f32 g[4];
@@ -2132,6 +2155,36 @@ static void color_quad(const Raster *r, const civue_quad *q, civue_box b) {
 
       _mm_storeu_si128((__m128i *)(void *)d,
                        _mm_packus_epi16(dst[0], dst[1]));
+    }
+#elif defined(__ARM_NEON)
+    // eight pixels at a time, a channel a vector: the math below.
+    uint8x8_t by = vdup_n_u8((u8)opacity);
+
+    for (; x + 8 <= b.x1; x += 8, t += 32, d += 32) {
+      // red first in the atlas, blue first in the pixels.
+      uint8x8x4_t texels = vld4_u8(t);
+
+      // most of an emoji's box is nothing.
+      if (!vget_lane_u64(
+            vreinterpret_u64_u8(
+              vorr_u8(vorr_u8(texels.val[0], texels.val[1]),
+                      vorr_u8(texels.val[2], texels.val[3]))),
+            0)) {
+        continue;
+      }
+
+      uint8x8x4_t px = vld4_u8(d);
+      uint8x8_t alpha = div255_x8(vmull_u8(texels.val[3], by));
+      uint8x8_t inv = vmvn_u8(alpha);
+
+      px.val[0] = vqadd_u8(div255_x8(vmull_u8(texels.val[2], by)),
+                           div255_x8(vmull_u8(px.val[0], inv)));
+      px.val[1] = vqadd_u8(div255_x8(vmull_u8(texels.val[1], by)),
+                           div255_x8(vmull_u8(px.val[1], inv)));
+      px.val[2] = vqadd_u8(div255_x8(vmull_u8(texels.val[0], by)),
+                           div255_x8(vmull_u8(px.val[2], inv)));
+      px.val[3] = vqadd_u8(alpha, div255_x8(vmull_u8(px.val[3], inv)));
+      vst4_u8(d, px);
     }
 #endif
 
