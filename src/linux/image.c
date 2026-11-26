@@ -1417,12 +1417,325 @@ static bool webp_frames(const u8 *bytes, usize n, u32 max_pixels,
 }
 #endif
 
-// the frames of gifs and webps. an animated png shows its first one still.
+#ifdef CIVUE_PNG
+static u32 be32(const u8 *p) {
+  return (u32)p[0] << 24 | (u32)p[1] << 16 | (u32)p[2] << 8 | p[3];
+}
+
+static void put_be32(u8 *p, u32 v) {
+  p[0] = (u8)(v >> 24), p[1] = (u8)(v >> 16), p[2] = (u8)(v >> 8), p[3] = (u8)v;
+}
+
+// what a chunk of png ends with, over its type and its bytes.
+static u32 png_crc(const u8 *b, usize n, u32 crc) {
+  static u32 table[256];
+
+  if (!table[1]) {
+    for (u32 i = 0; i < 256; i++) {
+      u32 c = i;
+
+      for (u32 k = 0; k < 8; k++) {
+        c = c & 1 ? 0xedb88320u ^ (c >> 1) : c >> 1;
+      }
+
+      table[i] = c;
+    }
+  }
+
+  for (usize i = 0; i < n; i++) {
+    crc = table[(crc ^ b[i]) & 0xff] ^ (crc >> 8);
+  }
+
+  return crc;
+}
+
+static usize put_chunk(u8 *to, const char *type, const u8 *data, u32 len) {
+  put_be32(to, len);
+  memcpy(to + 4, type, 4);
+
+  if (len) {
+    memcpy(to + 8, data, len);
+  }
+
+  put_be32(to + 8 + len, ~png_crc(to + 4, len + 4, ~0u));
+  return (usize)len + 12;
+}
+
+typedef struct {
+  u32 width, height, x, y;
+  f32 delay;
+  // what becomes of the canvas after it, and how it goes over it: the
+  // dispose_op and blend_op of the apng specification.
+  u8 dispose, blend;
+  // the chunks of its pixels are from `from` up to `end` in the file.
+  usize from, end;
+} PngFrame;
+
+constexpr u8 APNG_DISPOSE_BACKGROUND = 1;
+constexpr u8 APNG_DISPOSE_PREVIOUS = 2;
+constexpr u8 APNG_BLEND_SOURCE = 0;
+constexpr u32 PNG_FRAMES_MAX = 4096;
+
+typedef struct {
+  // the 13 bytes of IHDR.
+  const u8 *header;
+  // the chunks before the pixels every frame is read with: the palette,
+  // what is transparent, the gamma and the profile.
+  usize kept[16][2];
+  u32 nkept;
+  PngFrame *frames;
+  u32 count;
+} Apng;
+
+// the frames an animated png says it has. false for a still one.
+static bool apng_open(Apng *a, const u8 *b, usize n) {
+  usize at = 8;
+  bool told = false, pixels = false;
+  u32 cap = 0;
+
+  *a = (Apng){};
+
+  while (at + 12 <= n) {
+    u32 len = be32(b + at);
+    const char *type = (const char *)b + at + 4;
+    const u8 *data = b + at + 8;
+
+    if (len > n - at - 12) {
+      break;
+    }
+
+    usize next = at + 12 + len;
+
+    if (!memcmp(type, "IHDR", 4) && len == 13) {
+      a->header = data;
+    }
+    else if (!memcmp(type, "acTL", 4)) {
+      told = true;
+    }
+    else if (!memcmp(type, "fcTL", 4) && len == 26) {
+      if (a->count == cap) {
+        cap = cap ? cap * 2 : 16;
+
+        PngFrame *grown = cap <= PNG_FRAMES_MAX
+                            ? realloc(a->frames, cap * sizeof *grown)
+                            : nullptr;
+
+        if (!grown) {
+          break;
+        }
+
+        a->frames = grown;
+      }
+
+      if (a->count) {
+        a->frames[a->count - 1].end = at;
+      }
+
+      u32 over = (u32)data[20] << 8 | data[21];
+      u32 under = (u32)data[22] << 8 | data[23];
+
+      a->frames[a->count++] = (PngFrame){
+        .width = be32(data + 4),
+        .height = be32(data + 8),
+        .x = be32(data + 12),
+        .y = be32(data + 16),
+        .delay = (f32)over / (f32)(under ? under : 100),
+        .dispose = data[24],
+        .blend = data[25],
+        .from = next,
+        .end = next,
+      };
+    }
+    else if (!memcmp(type, "IDAT", 4)) {
+      pixels = true;
+    }
+    else if (!memcmp(type, "IEND", 4)) {
+      if (a->count) {
+        a->frames[a->count - 1].end = at;
+      }
+
+      break;
+    }
+    else if (!pixels && memcmp(type, "fdAT", 4) &&
+             a->nkept < countof(a->kept)) {
+      a->kept[a->nkept][0] = at;
+      a->kept[a->nkept++][1] = next;
+    }
+
+    at = next;
+  }
+
+  if (!told || !a->header || a->count < 2) {
+    free(a->frames);
+    return false;
+  }
+
+  return true;
+}
+
+// a frame as a png of its own in `to`, which decode_png reads: the header
+// with its size, what was kept, then its pixels as IDAT.
+static usize apng_frame(const Apng *a, const PngFrame *f, const u8 *b, u8 *to) {
+  static const u8 SIGNATURE[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
+  u8 header[13];
+  usize len = sizeof SIGNATURE;
+
+  memcpy(to, SIGNATURE, sizeof SIGNATURE);
+  memcpy(header, a->header, sizeof header);
+  put_be32(header, f->width);
+  put_be32(header + 4, f->height);
+  len += put_chunk(to + len, "IHDR", header, sizeof header);
+
+  for (u32 i = 0; i < a->nkept; i++) {
+    memcpy(to + len, b + a->kept[i][0], a->kept[i][1] - a->kept[i][0]);
+    len += a->kept[i][1] - a->kept[i][0];
+  }
+
+  for (usize at = f->from; at < f->end;) {
+    u32 size = be32(b + at);
+    const char *type = (const char *)b + at + 4;
+
+    if (!memcmp(type, "IDAT", 4)) {
+      len += put_chunk(to + len, "IDAT", b + at + 8, size);
+    }
+    else if (!memcmp(type, "fdAT", 4) && size >= 4) {
+      len += put_chunk(to + len, "IDAT", b + at + 12, size - 4);
+    }
+
+    at += (usize)size + 12;
+  }
+
+  return len + put_chunk(to + len, "IEND", nullptr, 0);
+}
+
+// `src` of `f`'s size goes on the canvas where the frame says.
+static void apng_draw(u8 *canvas, u32 width, const PngFrame *f, const u8 *src) {
+  for (u32 y = 0; y < f->height; y++) {
+    u8 *to = canvas + ((usize)(f->y + y) * width + f->x) * 4;
+    const u8 *from = src + (usize)y * f->width * 4;
+
+    if (f->blend == APNG_BLEND_SOURCE) {
+      memcpy(to, from, (usize)f->width * 4);
+      continue;
+    }
+
+    for (u32 x = 0; x < f->width; x++, to += 4, from += 4) {
+      u32 left = 255 - from[3];
+
+      for (u32 k = 0; k < 4; k++) {
+        to[k] = (u8)(from[k] + div255(to[k] * left));
+      }
+    }
+  }
+}
+
+static void apng_region(u8 *to, const u8 *from, u32 width, const PngFrame *f) {
+  for (u32 y = 0; y < f->height; y++) {
+    usize row = ((usize)(f->y + y) * width + f->x) * 4;
+
+    if (from) {
+      memcpy(to + row, from + row, (usize)f->width * 4);
+    }
+    else {
+      memset(to + row, 0, (usize)f->width * 4);
+    }
+  }
+}
+
+static bool png_frames(const u8 *bytes, usize n, u32 max_pixels,
+                       usize max_bytes, civue__frames *out) {
+  Apng a;
+
+  if (!apng_open(&a, bytes, n)) {
+    return false;
+  }
+
+  defer free(a.frames);
+
+  u32 width = be32(a.header), height = be32(a.header + 4), w, h;
+
+  if (!width || !height || (u64)width * height > DECODED_PIXELS_MAX ||
+      !frames_size(width, height, a.count, max_pixels, max_bytes, &w, &h)) {
+    return false;
+  }
+
+  usize frame = (usize)w * h * 4, whole = (usize)width * height * 4;
+  u8 *rgba = calloc(a.count, frame);
+  f32 *delays = calloc(a.count, sizeof(f32));
+  u8 *canvas = calloc(1, whole), *before = malloc(whole);
+  u8 *scratch = malloc(whole), *file = malloc(n + 64);
+  u32 made = 0;
+  bool ok = rgba && delays && canvas && before && scratch && file;
+
+  for (u32 i = 0; ok && i < a.count; i++) {
+    const PngFrame *f = &a.frames[i];
+    u32 fw = 0, fh = 0;
+    bool other = false;
+
+    ok = f->width && f->height && f->x <= width && f->y <= height &&
+         f->width <= width - f->x && f->height <= height - f->y;
+
+    u8 *pixels =
+      ok ? decode_png(file, apng_frame(&a, f, bytes, file), &fw, &fh, &other)
+         : nullptr;
+
+    ok = pixels && fw == f->width && fh == f->height;
+
+    if (ok) {
+      // the first frame has nothing before it to go back to.
+      u8 dispose = i == 0 && f->dispose == APNG_DISPOSE_PREVIOUS
+                     ? APNG_DISPOSE_BACKGROUND
+                     : f->dispose;
+
+      if (dispose == APNG_DISPOSE_PREVIOUS) {
+        memcpy(before, canvas, whole);
+      }
+
+      apng_draw(canvas, width, f, pixels);
+      delays[made] = f->delay <= 0.01f ? 0.1f : f->delay;
+      memcpy(scratch, canvas, whole);
+      ok = scale_into(scratch, width, height, rgba + made * frame, w, h);
+      made++;
+
+      if (dispose == APNG_DISPOSE_BACKGROUND) {
+        apng_region(canvas, nullptr, width, f);
+      }
+      else if (dispose == APNG_DISPOSE_PREVIOUS) {
+        apng_region(canvas, before, width, f);
+      }
+    }
+
+    free(pixels);
+  }
+
+  free(canvas);
+  free(before);
+  free(scratch);
+  free(file);
+
+  if (!ok || made < 2) {
+    free(rgba);
+    free(delays);
+    return false;
+  }
+
+  *out = (civue__frames){rgba, delays, w, h, made};
+  return true;
+}
+#endif
+
+// the frames of gifs, webps and animated pngs.
 bool civue__image_decode_frames(const u8 *bytes, usize n, u32 max_pixels,
                                 usize max_bytes, civue__frames *out) {
   if (is_gif(bytes, n)) {
     return gif_frames(bytes, n, max_pixels, max_bytes, out);
   }
+
+#ifdef CIVUE_PNG
+  if (is_png(bytes, n)) {
+    return png_frames(bytes, n, max_pixels, max_bytes, out);
+  }
+#endif
 
 #ifdef CIVUE_WEBP
   if (is_webp(bytes, n)) {
