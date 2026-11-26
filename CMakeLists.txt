@@ -14,6 +14,206 @@ if(CMAKE_SCRIPT_MODE_FILE)
     file(WRITE ${path} "${content}")
   endfunction()
 
+  # downloads `url`, the icons named `what`, to `path` and sets `result` to
+  # 0, or to what went wrong: the http status iconify answered, or curl's
+  # message. a busy or failing api, 429 or a status of 500 and over, and a
+  # dropped connection are tried again after a pause that doubles, or after
+  # what retry-after asks.
+  function(civue__download url what path result)
+    set(pause 2)
+    foreach(attempt RANGE 1 5)
+      file(DOWNLOAD ${url} ${path}.part STATUS status LOG log TIMEOUT 30
+        TLS_VERIFY ON)
+      list(GET status 0 code)
+      list(GET status 1 why)
+      if(code EQUAL 0)
+        file(RENAME ${path}.part ${path})
+        set(${result} 0 PARENT_SCOPE)
+        return()
+      endif()
+      file(REMOVE ${path}.part)
+
+      # curl's log holds every response, the last one counts.
+      set(http 0)
+      string(REGEX MATCHALL "HTTP/[0-9.]+ [0-9]+" answers "${log}")
+      if(answers)
+        list(GET answers -1 answer)
+        string(REGEX REPLACE ".* " "" http "${answer}")
+      endif()
+
+      # 6 and 7 are a name or a host curl could not reach, 28 a timeout, 52
+      # and 56 a connection that dropped.
+      if(NOT (http EQUAL 429 OR http GREATER_EQUAL 500 OR code EQUAL 6 OR
+              code EQUAL 7 OR code EQUAL 28 OR code EQUAL 52 OR
+              code EQUAL 56) OR attempt EQUAL 5)
+        break()
+      endif()
+
+      set(wait ${pause})
+      if(log MATCHES "[Rr]etry-[Aa]fter:[ \t]*([0-9]+)")
+        set(wait ${CMAKE_MATCH_1})
+        if(wait GREATER 60)
+          set(wait 60)
+        endif()
+      endif()
+      if(http GREATER 0)
+        set(why "iconify answered ${http}")
+      endif()
+      message(STATUS "civue: fetching ${what}: ${why}, trying again in "
+        "${wait} seconds")
+      execute_process(COMMAND ${CMAKE_COMMAND} -E sleep ${wait})
+      math(EXPR pause "${pause} * 2")
+    endforeach()
+
+    if(http GREATER 0)
+      set(${result} "iconify answered ${http}" PARENT_SCOPE)
+    else()
+      set(${result} "${why}" PARENT_SCOPE)
+    endif()
+  endfunction()
+
+  # fetches the svg of one icon into the cache, for what its set's json
+  # cannot give whole.
+  function(civue__fetch_one set icon)
+    set(cached ${cache}/${set}/${icon}.svg)
+    civue__download(${api}/${set}/${icon}.svg ${set}:${icon} ${cached} result)
+    if(result MATCHES "answered 404$")
+      message(FATAL_ERROR "civue: iconify has no icon ${set}:${icon}")
+    elseif(NOT result STREQUAL "0")
+      message(FATAL_ERROR "civue: fetching ${set}:${icon} failed: ${result}")
+    endif()
+  endfunction()
+
+  # fetches the icons of `set` missing from the cache through the set's json,
+  # many in one request, and writes each as the svg iconify would serve: a
+  # build that names many new icons sends a few requests, not one each, and
+  # stays under iconify's rate limit.
+  function(civue__fetch_set set icons)
+    file(MAKE_DIRECTORY ${cache}/${set})
+    # one build at a time fetches into a set, another may have fetched these
+    # icons meanwhile.
+    file(LOCK ${cache}/${set} DIRECTORY)
+    set(missing)
+    foreach(icon ${icons})
+      if(NOT EXISTS ${cache}/${set}/${icon}.svg)
+        list(APPEND missing ${icon})
+      endif()
+    endforeach()
+
+    # a query of 1500 characters at most, far under what servers take.
+    set(batches)
+    set(batch "")
+    foreach(icon ${missing})
+      string(LENGTH "${batch},${icon}" length)
+      if(batch AND length GREATER 1500)
+        list(APPEND batches "${batch}")
+        set(batch "")
+      endif()
+      if(batch)
+        string(APPEND batch ",${icon}")
+      else()
+        set(batch "${icon}")
+      endif()
+    endforeach()
+    if(batch)
+      list(APPEND batches "${batch}")
+    endif()
+
+    set(json ${cache}/${set}/.batch.json)
+    foreach(batch ${batches})
+      civue__download("${api}/${set}.json?icons=${batch}" "the icons of ${set}"
+        ${json} result)
+      if(result MATCHES "answered 404$")
+        message(FATAL_ERROR "civue: iconify has no icon set ${set}")
+      elseif(NOT result STREQUAL "0")
+        message(FATAL_ERROR
+          "civue: fetching the icons of ${set} failed: ${result}")
+      endif()
+      file(READ ${json} data)
+      file(REMOVE ${json})
+
+      string(JSON lost ERROR_VARIABLE none GET "${data}" not_found)
+      if(NOT none)
+        string(JSON first GET "${lost}" 0)
+        message(FATAL_ERROR "civue: iconify has no icon ${set}:${first}")
+      endif()
+
+      # iconify's defaults, then the set's.
+      foreach(key left top width height)
+        set(base_${key} 0)
+        if(key MATCHES "width|height")
+          set(base_${key} 16)
+        endif()
+        string(JSON value ERROR_VARIABLE none GET "${data}" ${key})
+        if(NOT none)
+          set(base_${key} ${value})
+        endif()
+      endforeach()
+
+      string(REPLACE "," ";" wanted "${batch}")
+      foreach(icon ${wanted})
+        # an alias names its parent and may change its size, its parent may
+        # be an alias too. what is nearest the icon wins, the set's values
+        # last. a rotation or a flip is left to the svg iconify draws. json
+        # stays out of lists, a body may hold semicolons.
+        foreach(key left top width height)
+          unset(${key})
+        endforeach()
+        set(turned false)
+        set(source ${icon})
+        set(root "")
+        foreach(depth RANGE 8)
+          string(JSON entry ERROR_VARIABLE none GET "${data}" icons ${source})
+          if(none)
+            string(JSON entry ERROR_VARIABLE none GET "${data}" aliases
+              ${source})
+            if(none)
+              message(FATAL_ERROR "civue: iconify has no icon ${set}:${icon}")
+            endif()
+          else()
+            set(root "${entry}")
+          endif()
+
+          foreach(key left top width height)
+            string(JSON value ERROR_VARIABLE none GET "${entry}" ${key})
+            if(NOT none AND NOT DEFINED ${key})
+              set(${key} ${value})
+            endif()
+          endforeach()
+          foreach(key rotate hFlip vFlip)
+            string(JSON value ERROR_VARIABLE none GET "${entry}" ${key})
+            if(NOT none AND value)
+              set(turned true)
+            endif()
+          endforeach()
+
+          if(root)
+            break()
+          endif()
+          string(JSON source GET "${entry}" parent)
+        endforeach()
+        foreach(key left top width height)
+          if(NOT DEFINED ${key})
+            set(${key} ${base_${key}})
+          endif()
+        endforeach()
+
+        if(turned)
+          civue__fetch_one(${set} ${icon})
+          continue()
+        endif()
+
+        string(JSON body GET "${root}" body)
+        set(cached ${cache}/${set}/${icon}.svg)
+        file(WRITE ${cached}.part "<svg xmlns=\"http://www.w3.org/2000/svg\" \
+width=\"1em\" height=\"1em\" viewBox=\"${left} ${top} ${width} ${height}\">\
+${body}</svg>")
+        file(RENAME ${cached}.part ${cached})
+      endforeach()
+    endforeach()
+    file(LOCK ${cache}/${set} DIRECTORY RELEASE)
+  endfunction()
+
   set(space "[ \t\r\n]*")
   set(word "[A-Za-z0-9_]+")
   set(names ${extra})
@@ -55,6 +255,25 @@ if(CMAKE_SCRIPT_MODE_FILE)
   list(REMOVE_DUPLICATES names)
   list(SORT names)
 
+  # the icons of iconify's api the cache lacks, gathered by set and fetched
+  # a set at a time.
+  set(fetched)
+  foreach(name ${names})
+    string(REPLACE ":" ";" parts "${name}")
+    list(GET parts 0 set)
+    list(GET parts 1 icon)
+    if(collections MATCHES "(^|;)${set}=" OR
+       EXISTS ${cache}/${set}/${icon}.svg)
+      continue()
+    endif()
+    list(APPEND fetched ${set})
+    list(APPEND missing_${set} ${icon})
+  endforeach()
+  list(REMOVE_DUPLICATES fetched)
+  foreach(set ${fetched})
+    civue__fetch_set(${set} "${missing_${set}}")
+  endforeach()
+
   set(defines "")
   set(arrays "")
   set(entries "")
@@ -81,27 +300,6 @@ if(CMAKE_SCRIPT_MODE_FILE)
       file(READ ${dir}/${icon}.svg svg)
     else()
       set(cached ${cache}/${set}/${icon}.svg)
-      if(NOT EXISTS ${cached})
-        # one build at a time fetches into a set, another may have fetched
-        # this icon meanwhile.
-        file(MAKE_DIRECTORY ${cache}/${set})
-        file(LOCK ${cache}/${set} DIRECTORY)
-        if(NOT EXISTS ${cached})
-          file(DOWNLOAD ${api}/${set}/${icon}.svg ${cached}.part
-            STATUS status TIMEOUT 30 TLS_VERIFY ON)
-          list(GET status 0 code)
-          list(GET status 1 why)
-          if(NOT code EQUAL 0)
-            file(REMOVE ${cached}.part)
-            if(code EQUAL 22)
-              message(FATAL_ERROR "civue: iconify has no icon ${name}")
-            endif()
-            message(FATAL_ERROR "civue: fetching ${name} failed: ${why}")
-          endif()
-          file(RENAME ${cached}.part ${cached})
-        endif()
-        file(LOCK ${cache}/${set} DIRECTORY RELEASE)
-      endif()
       file(READ ${cached} svg)
     endif()
 
