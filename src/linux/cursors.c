@@ -107,8 +107,27 @@ typedef struct {
   const char *names[2];
 } System;
 
-static System system_of(civue_cursor_kind k) {
-  switch (k) {
+// a resize's cursor by its angle, the eight directions a theme has.
+static System resize_of(i16 angle) {
+  static const System around[8] = {
+    {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_E_RESIZE, {"e-resize", "right_side"}},
+    {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_SE_RESIZE,
+     {"se-resize", "bottom_right_corner"}},
+    {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_S_RESIZE, {"s-resize", "bottom_side"}},
+    {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_SW_RESIZE,
+     {"sw-resize", "bottom_left_corner"}},
+    {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_W_RESIZE, {"w-resize", "left_side"}},
+    {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NW_RESIZE,
+     {"nw-resize", "top_left_corner"}},
+    {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_N_RESIZE, {"n-resize", "top_side"}},
+    {WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NE_RESIZE,
+     {"ne-resize", "top_right_corner"}}};
+  i32 turn = ((angle % 360) + 360) % 360;
+  return around[(turn + 22) / 45 % 8];
+}
+
+static System system_of(civue_cursor c) {
+  switch (c.kind) {
     case CIVUE_CURSOR_POINTER:
       return (System){WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_POINTER,
                       {"pointer", "hand2"}};
@@ -126,6 +145,17 @@ static System system_of(civue_cursor_kind k) {
     case CIVUE_CURSOR_RESIZE_W:
       return (System){WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_W_RESIZE,
                       {"w-resize", "left_side"}};
+    case CIVUE_CURSOR_HAND:
+      return (System){WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_GRAB,
+                      {"grab", "openhand"}};
+    case CIVUE_CURSOR_GRABBING:
+      return (System){WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_GRABBING,
+                      {"grabbing", "closedhand"}};
+    case CIVUE_CURSOR_CROSSHAIR:
+      return (System){WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_CROSSHAIR,
+                      {"crosshair", "cross"}};
+    case CIVUE_CURSOR_RESIZE:
+      return resize_of(c.angle);
     default:
       return (System){WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT,
                       {"default", "left_ptr"}};
@@ -244,7 +274,7 @@ static void apply(civue_cursor c, bool tool) {
     attach(tool, m->buffer, pixels, C.points, m->hot_x, m->hot_y);
   }
   else {
-    set_system(tool, system_of(c.kind));
+    set_system(tool, system_of(c));
   }
 }
 
