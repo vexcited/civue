@@ -56,6 +56,33 @@ civue_field_response civue_text_area(civue_ui *ui, civue_id id, civue_rect r,
                                      char **value, const char *placeholder,
                                      civue_text_style style,
                                      civue_field_look look);
+// what a text area shows in place of some of its text, like the picture of
+// an emoji for its name between colons. each is one character to the caret
+// and to the keys, and its bytes stay in the text as they are.
+typedef struct {
+  void *ctx;
+  // how many bytes of `text` from `at` are shown as one, 0 for none, and
+  // how wide it is in points.
+  uint32_t (*find)(void *ctx, const char *text, uint32_t len, uint32_t at,
+                   float *width);
+  // draws the one these bytes are over `r`, a line high and about as wide
+  // as asked: the room is a whole number of spaces.
+  void (*paint)(civue_ui *ui, void *ctx, const char *text, uint32_t len,
+                civue_rect r);
+} civue_field_inlays;
+
+// a text area with inlays, none when `inlays` is null.
+civue_field_response civue_text_area_inlaid(civue_ui *ui, civue_id id,
+                                            civue_rect r, char **value,
+                                            const char *placeholder,
+                                            civue_text_style style,
+                                            civue_field_look look,
+                                            const civue_field_inlays *inlays);
+// how high the text of a text area `width` points wide is, a line for the
+// caret after a last newline included.
+float civue_text_area_height(civue_ui *ui, const char *value,
+                             civue_text_style style, float width,
+                             const civue_field_inlays *inlays);
 // puts `text` at the caret of the focused field `id`, as a button beside it
 // types. its whole text after, malloc'd, nullptr when it isn't editing.
 char *civue_field_insert(civue_ui *ui, civue_id id, const char *text);
