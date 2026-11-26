@@ -118,6 +118,11 @@ void civue_wait_while(bool (*waiting)(void *arg), void *arg);
 bool civue_window_maximized();
 // brings the window to the front, a second launch's link opened in it.
 void civue_window_raise();
+// the same with the xdg-activation token another program handed for it,
+// like the server of a notification that was pressed: the compositor then
+// knows the user asked, where it may only flag a window that raises itself.
+// civue_window_raise for a null or an empty one.
+void civue_window_activate(const char *token);
 // whether a layer surface takes the keyboard: when it is clicked, or at once
 // and until told otherwise when `exclusive`. from the main thread.
 void civue_layer_keyboard(bool on, bool exclusive);

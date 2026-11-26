@@ -2299,6 +2299,23 @@ void civue_window_raise() {
   civue_on_main(raise_on_main, nullptr);
 }
 
+static void activate_on_main(void *arg) {
+  if (!W.activation || !WL.surface) {
+    return;
+  }
+  xdg_activation_v1_activate(W.activation, arg, WL.surface);
+  wl_display_flush(WL.display);
+}
+
+void civue_window_activate(const char *token) {
+  if (!token || !*token) {
+    civue_window_raise();
+    return;
+  }
+  // waited for, so the token outlives its use.
+  civue_on_main(activate_on_main, (void *)token);
+}
+
 // ---- globals ----
 
 static void *bind(struct wl_registry *r, u32 name,
