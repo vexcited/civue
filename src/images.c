@@ -1365,6 +1365,26 @@ void civue_images_fetched(civue_images *im, uint64_t load, const void *bytes,
   pump(im);
 }
 
+bool civue_frames_decode(const void *bytes, size_t len, uint32_t max_pixels,
+                         civue_frames *out) {
+  civue__frames frames = {};
+
+  if (!civue__image_decode_frames(bytes, len, max_pixels, SIZE_MAX, &frames)) {
+    return false;
+  }
+
+  *out = (civue_frames){
+    frames.rgba, frames.delays, frames.width, frames.height, frames.count,
+  };
+  return true;
+}
+
+void civue_frames_free(civue_frames *frames) {
+  free(frames->rgba);
+  free(frames->delays);
+  *frames = (civue_frames){};
+}
+
 uint64_t civue_images_version(civue_images *im) {
   if (!im) {
     return 0;

@@ -108,6 +108,22 @@ civue_image_info civue_images_get_animated(civue_images *im, civue_ui *ui,
                                            const char *url,
                                            uint32_t max_pixels);
 
+typedef struct {
+  // every frame one after the other, each `width` by `height` of
+  // premultiplied rgba8, rows from the top.
+  uint8_t *rgba;
+  // the seconds each frame shows for.
+  float *delays;
+  uint32_t width, height, count;
+} civue_frames;
+
+// every frame of the animated gif, webp or png in `bytes`, for an app that
+// wants the pixels themselves, its longest side `max_pixels` at most when
+// that is not 0. false for a still image. from any thread.
+bool civue_frames_decode(const void *bytes, size_t len, uint32_t max_pixels,
+                         civue_frames *out);
+void civue_frames_free(civue_frames *frames);
+
 // what the app's `fetch` got for `load`. `bytes` are copied.
 void civue_images_fetched(civue_images *im, uint64_t load, const void *bytes,
                           size_t len, civue_fetch_result result);
