@@ -24,7 +24,8 @@ extern "C" {
 /* an url is fetched once however many sizes of it are asked for, what was    */
 /* asked for last is loaded first, and what waits behind too many others is   */
 /* forgotten until it is asked for again. a file:// url followed by a raw    */
-/* absolute path is read from that file, never fetched nor cached.            */
+/* absolute path is read from that file, never fetched nor cached, and so is  */
+/* an url the app's `bytes_of` holds the bytes of.                            */
 /* ========================================================================== */
 
 typedef enum : uint8_t {
@@ -71,6 +72,10 @@ typedef struct {
   // how many bytes of `url` name its image, for urls ending in a signature
   // that changes while the image does not. the whole url when null.
   size_t (*key_len)(void *ctx, const char *url);
+  // the bytes the app holds for `url` for as long as the images live, which
+  // are read neither from the disk cache nor fetched. null when it has none.
+  // may be null.
+  const void *(*bytes_of)(void *ctx, const char *url, size_t *len);
   // the name the disk cache is filed under in the user's caches, the app's.
   // no disk cache when null.
   const char *disk_name;

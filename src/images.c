@@ -612,6 +612,17 @@ static void link_newest(civue_images *im, Entry *e) {
 }
 
 static void queue_source(civue_images *im, Source *s) {
+  usize len = 0;
+  const void *held =
+    im->o.bytes_of ? im->o.bytes_of(im->o.ctx, s->url, &len) : nullptr;
+
+  if (held && len != 0) {
+    s->bytes = blob_new(held, len);
+    s->from_disk = false;
+    s->state = SOURCE_LOADED;
+    return;
+  }
+
   s->state = s->path ? SOURCE_QUEUED : SOURCE_WANTED;
   vec_push(&im->pending, s);
 }
