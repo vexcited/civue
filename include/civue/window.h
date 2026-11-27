@@ -10,7 +10,7 @@ extern "C" {
 /* ========================================================================== */
 /* the window and the main loop. frames are only built when something changed */
 /* and are presented in step with the display: a display link on macos, the   */
-/* compositor's frame callbacks on wayland.                                   */
+/* compositor's frame callbacks on wayland, dwm's refresh on windows.         */
 /* ========================================================================== */
 
 typedef struct {
@@ -50,10 +50,12 @@ typedef struct {
   float width, height, min_width, min_height;
   // the height of the app's own title bar, drawn in the window under a
   // transparent one, the window's buttons centered in it. 0 keeps the system's.
+  // windows draws none: civue draws them at its end, ui->titlebar_end_inset
+  // wide.
   float titlebar;
   // the id of the region the app's title bar registers with civue_interact: a
-  // press where it is topmost moves the window on linux, a double click
-  // maximizes it. 0 for the whole height of `titlebar`.
+  // press where it is topmost moves the window on linux and windows, a double
+  // click maximizes it. 0 for the whole height of `titlebar`.
   civue_id titlebar_id;
   // the id the desktop knows the app by, its desktop file's name on linux.
   // "civue" when null.
@@ -139,6 +141,22 @@ void civue_layer_input(const civue_rect *rects, int n);
 // event loop from civue's, like the main queue of libdispatch. before
 // civue_window_run.
 void civue_watch_fd(int fd, void (*ready)(void *arg), void *arg);
+#endif
+
+#ifdef _WIN32
+// the window's HWND, null before it opens.
+void *civue_window_hwnd();
+// handles the messages of the thread while `waiting` says so, from the main
+// thread, running what other threads ask of it meanwhile: a modal dialog's
+// wait. what was pressed or typed meanwhile is dropped.
+void civue_wait_while(bool (*waiting)(void *arg), void *arg);
+// whether the window is maximized.
+bool civue_window_maximized();
+// brings the window to the front, restored when minimized, a second
+// launch's link opened in it, from any thread. windows lets it come forward
+// when the second launch called AllowSetForegroundWindow for this process,
+// and flashes it in the taskbar otherwise.
+void civue_window_raise();
 #endif
 
 #ifdef __cplusplus

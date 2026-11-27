@@ -403,7 +403,8 @@ endif()
 # embeds them in <target>. on macos each .metal file becomes
 # <name>_<file>_metallib, on linux each .vert, .frag or .comp file becomes
 # <name>_<file>_<ext>, spir-v for vulkan 1.2, with a _len next to it. the
-# other platform's files are skipped.
+# other platform's files are skipped, and windows, which draws on the cpu,
+# compiles none.
 function(civue_embed_shaders target)
   cmake_parse_arguments(PARSE_ARGV 1 arg "" "PREFIX" "INCLUDE;SOURCES")
   if(NOT arg_PREFIX)
@@ -454,7 +455,7 @@ function(civue_embed_shaders target)
         "#embed \"${name}.metallib\"\n};\n"
         "const size_t ${var}_len = sizeof ${var};\n")
     endforeach()
-  else()
+  elseif(NOT WIN32)
     find_program(CIVUE_GLSLC glslc REQUIRED)
 
     foreach(shader ${arg_SOURCES})
@@ -574,6 +575,13 @@ set(CIVUE_LINUX_SOURCES
   src/linux/clipboard.c src/linux/cursors.c src/linux/filepanel.c
   src/linux/gfx.c src/linux/image.c src/linux/pasteboard.c src/linux/spell.c
   src/linux/svg.c src/linux/text.c src/linux/vk.c src/linux/window.c)
+
+set(CIVUE_WINDOWS_SOURCES
+  src/windows/clipboard.c src/windows/cursors.c src/windows/drop.c
+  src/windows/filepanel.c src/windows/gfx.c src/windows/image.c
+  src/windows/pasteboard.c src/windows/posix.c src/windows/spell.c
+  src/windows/svg.c src/windows/text.c src/windows/video.c
+  src/windows/webview.c src/windows/window.c)
 
 if(APPLE)
   enable_language(OBJC)
@@ -701,8 +709,46 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   endforeach()
 
   target_include_directories(civue SYSTEM PRIVATE ${gen})
+elseif(WIN32)
+  # windows draws on the cpu, as linux does without a gpu, and presents
+  # through gdi.
+  add_library(civue STATIC ${CIVUE_SOURCES} ${CIVUE_WINDOWS_SOURCES})
+  target_compile_definitions(civue PRIVATE
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX COBJMACROS
+    _WIN32_WINNT=0x0A00 WINVER=0x0A00)
+
+  find_package(Threads REQUIRED)
+  target_link_libraries(civue PUBLIC
+    Threads::Threads user32 gdi32 shell32 ole32 oleaut32 uuid dwmapi imm32
+    uxtheme shlwapi comdlg32 dwrite d2d1 windowscodecs mfplat mf mfuuid
+    mfreadwrite propsys)
+
+  # web views are webview2's, its runtime found as the app runs: only its
+  # header is needed here, from msys2's webview2-loader or microsoft's sdk.
+  find_path(CIVUE_WEBVIEW2_INCLUDE WebView2.h)
+
+  if(NOT CIVUE_WEBVIEW2_INCLUDE)
+    message(FATAL_ERROR "civue: no WebView2.h, install the webview2-loader "
+      "package of msys2 or the WebView2 sdk")
+  endif()
+
+  target_include_directories(civue SYSTEM PRIVATE ${CIVUE_WEBVIEW2_INCLUDE})
+
+  # wic reads webp only with a codec the store installs, and never its
+  # frames: libwebp does, linked in so that the app ships no dll of it.
+  find_library(CIVUE_WEBPDEMUX_A libwebpdemux.a)
+  find_library(CIVUE_WEBP_A libwebp.a)
+  find_library(CIVUE_SHARPYUV_A libsharpyuv.a)
+
+  if(CIVUE_WEBPDEMUX_A AND CIVUE_WEBP_A AND CIVUE_SHARPYUV_A)
+    target_link_libraries(civue PUBLIC
+      ${CIVUE_WEBPDEMUX_A} ${CIVUE_WEBP_A} ${CIVUE_SHARPYUV_A})
+    target_compile_definitions(civue PRIVATE CIVUE_WEBP)
+  else()
+    message(STATUS "civue: no static libwebp, wic reads webp where it can")
+  endif()
 else()
-  message(FATAL_ERROR "civue runs on macOS and Linux")
+  message(FATAL_ERROR "civue runs on macOS, Linux and Windows")
 endif()
 
 add_library(civue::civue ALIAS civue)
