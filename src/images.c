@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include <utime.h>
 
 constexpr usize MEMORY_BYTES = 256u << 20;
 constexpr usize DISK_BYTES = 512u << 20;
@@ -150,8 +151,9 @@ static Blob *read_file(const char *path) {
     return nullptr;
   }
 
-  // the sweep removes the files read longest ago.
-  futimens(fd, nullptr);
+  // the sweep removes the files read longest ago. by its path: windows
+  // changes the times of a file only through a handle open to write them.
+  utime(path, nullptr);
   return b;
 }
 
@@ -1065,11 +1067,14 @@ static char *path_of(civue_images *im, const char *url) {
 }
 
 static char *caches_dir(const char *name) {
+#ifdef _WIN32
+  const char *local = getenv("LOCALAPPDATA");
+  return local ? xfmt("%s/%s/images", local, name) : nullptr;
+#elifdef __APPLE__
   const char *home = getenv("HOME");
-
-#ifdef __APPLE__
   return home ? xfmt("%s/Library/Caches/%s/images", home, name) : nullptr;
 #else
+  const char *home = getenv("HOME");
   const char *xdg = getenv("XDG_CACHE_HOME");
 
   if (xdg && xdg[0] == '/') {
