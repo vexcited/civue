@@ -188,6 +188,7 @@ civue_icons(app ICONS mdi:home COLLECTIONS app=${CMAKE_CURRENT_SOURCE_DIR}/icons
   color glyphs, images and pixel grids are all one quad layout, drawn in order in a single render pass and batched
   by the image they sample. A frame's quads go to one of three buffers kept for reuse, so steady frames allocate
   nothing on the gpu.
+  On macOS the fills and images that hide what is under them are drawn first with their depth written, so the gpu shades nothing they cover.
 - **Atlases.** Glyphs and icons go into 2048 pixel atlases packed in shelves. On macOS their pixels are memory the gpu reads in place, so nothing is uploaded and nothing is kept twice. Colors blend on srgb encoded values like browsers do.
 - **On the cpu.** `civue_raster` draws a list as the shader does: rects and shadows are filled in rows but for their curved corners, which ask the shader's math a pixel at a time, translucent rows are blended four pixels at a time and glyphs sixteen. That is NEON on arm64, macOS and Linux alike. On x86 the same paths are SSE2, eight pixels at a time where the build has AVX2, and a clear or an opaque rect larger than the caches near a core is written past them, which arm64 cores do by themselves. A scaled image is read between its texels four channels at a time on both. Its frames differ from the gpu's by two steps of a color at most, on a few dozen pixels of a window.
 - **Text.** Core Text lays text out on macOS, HarfBuzz, FriBidi and fontconfig on Linux, FreeType rasterizes there.
