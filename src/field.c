@@ -770,6 +770,7 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
       multiline ? at.y + (b->nlines ? b->lines[cl].top : 0) : origin.y + 1;
     f->caret_rect =
       rect(x, y0, x + 1, y0 + (multiline ? lh : style.line_height - 2));
+    ui->caret = f->caret_rect;
   }
   f64 since = ui->now - f->blink;
   bool lit = (u64)(since / 0.53) % 2 == 0;

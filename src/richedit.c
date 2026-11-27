@@ -987,6 +987,7 @@ rich_edit_at(civue_ui *ui, civue_id id, civue_vec2 origin, f32 width,
     out.has_caret = true;
     out.caret = c;
     out.caret_line = l.boxes.v[block_at(d, st->focus)].line;
+    ui->caret = rect_xywh(origin.x + c.x, origin.y + c.y, 1, out.caret_line);
   }
   if (touched) {
     st->blink = ui->now;
