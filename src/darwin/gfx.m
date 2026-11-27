@@ -32,6 +32,8 @@ constexpr NSUInteger QUAD_SLOT = 1;
   id<MTLBuffer> buffer;
   u8 *own;
   civue_pixels pixels;
+  // no pixel of it is see through.
+  bool opaque;
 }
 @end
 
@@ -53,14 +55,27 @@ typedef struct {
 
 constexpr u32 QUAD_BUFFERS = 3;
 
+// the pipelines past the blended ones, which are 0, 1 to multiply and 2 to
+// erase: the one of the quads that hide what is under them.
+constexpr u8 MODE_OPAQUE = 3;
+
+// the depth says which quad is on top, see the ui shader. past this many
+// quads a frame has no room for them and is drawn blended only.
+constexpr u32 DEPTH_QUADS = 1u << 22;
+
 struct civue_gfx {
   id<MTLDevice> device;
   id<MTLCommandQueue> queue;
   QuadBuffer quad_buffers[QUAD_BUFFERS];
-  id<MTLFunction> vs, fs;
-  // the pipelines by their pixel format, then whether they multiply or
-  // erase.
+  id<MTLFunction> vs, fs, opaque_vs, opaque_fs;
+  // the pipelines by their pixel format, then whether they multiply, erase
+  // or hide.
   NSMutableDictionary<NSNumber *, id<MTLRenderPipelineState>> *pipelines;
+  // the depth test of the quads that hide and of the blended ones, which
+  // write none.
+  id<MTLDepthStencilState> hiding, hidden;
+  // as large as the last target, never read after its frame.
+  id<MTLTexture> depth;
   id<MTLSamplerState> linear, nearest;
   civue_atlas atlas, color_atlas;
   id<MTLTexture> atlas_texture;
@@ -181,6 +196,15 @@ static void ready(civue_gfx *g) {
 
   g->vs = [lib newFunctionWithName:@"ui_vs"];
   g->fs = [lib newFunctionWithName:@"ui_fs"];
+  g->opaque_vs = [lib newFunctionWithName:@"ui_opaque_vs"];
+  g->opaque_fs = [lib newFunctionWithName:@"ui_opaque_fs"];
+
+  MTLDepthStencilDescriptor *depth = [MTLDepthStencilDescriptor new];
+  depth.depthCompareFunction = MTLCompareFunctionLess;
+  depth.depthWriteEnabled = YES;
+  g->hiding = [device_of(g) newDepthStencilStateWithDescriptor:depth];
+  depth.depthWriteEnabled = NO;
+  g->hidden = [device_of(g) newDepthStencilStateWithDescriptor:depth];
   g->pipelines = [NSMutableDictionary dictionary];
   g->linear = sampler(device_of(g), MTLSamplerMinMagFilterLinear);
   g->nearest = sampler(device_of(g), MTLSamplerMinMagFilterNearest);
@@ -227,8 +251,9 @@ static id<MTLRenderPipelineState> pipeline(civue_gfx *g, MTLPixelFormat format,
   }
 
   MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
-  d.vertexFunction = g->vs;
-  d.fragmentFunction = g->fs;
+  d.vertexFunction = mode == MODE_OPAQUE ? g->opaque_vs : g->vs;
+  d.fragmentFunction = mode == MODE_OPAQUE ? g->opaque_fs : g->fs;
+  d.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
 
   MTLVertexDescriptor *v = [MTLVertexDescriptor vertexDescriptor];
 
@@ -247,7 +272,7 @@ static id<MTLRenderPipelineState> pipeline(civue_gfx *g, MTLPixelFormat format,
   // the coverage leaves, alpha too.
   MTLRenderPipelineColorAttachmentDescriptor *att = d.colorAttachments[0];
   att.pixelFormat = format;
-  att.blendingEnabled = YES;
+  att.blendingEnabled = mode != MODE_OPAQUE;
   att.sourceRGBBlendFactor = mode == 1   ? MTLBlendFactorDestinationColor
                              : mode == 2 ? MTLBlendFactorZero
                                          : MTLBlendFactorOne;
@@ -324,10 +349,24 @@ static id<MTLTexture> buffer_texture(id<MTLDevice> device, CivueImage *image,
   return [image->buffer newTextureWithDescriptor:d offset:0 bytesPerRow:stride];
 }
 
+// whether no pixel is see through.
+static bool opaque(const u8 *rgba, u32 w, u32 h) {
+  usize count = (usize)w * h;
+  u8 all = 0xff;
+
+  for (usize i = 0; i < count; i++) {
+    all &= rgba[i * 4 + 3];
+  }
+
+  return count && all == 0xff;
+}
+
 civue_texture civue_gfx_upload_image(civue_gfx *g, u32 w, u32 h,
                                      const u8 *rgba) {
   CivueImage *image = [CivueImage new];
   id<MTLTexture> t = buffer_texture(device_of(g), image, w, h, rgba);
+
+  image->opaque = opaque(rgba, w, h);
 
   if (!t) {
     usize len = (usize)w * h * 4;
@@ -494,6 +533,107 @@ static void upload_atlases(civue_gfx *g) {
   }
 }
 
+// the depth of a target, whose memory only lasts its frame where the gpu
+// can do that.
+static id<MTLTexture> depth_of(civue_gfx *g, id<MTLTexture> target) {
+  if (g->depth && g->depth.width == target.width &&
+      g->depth.height == target.height) {
+    return g->depth;
+  }
+
+  g->depth =
+    texture_stored(device_of(g), MTLPixelFormatDepth32Float, (u32)target.width,
+                   (u32)target.height, MTLTextureUsageRenderTarget,
+                   device_of(g).hasUnifiedMemory ? MTLStorageModeMemoryless
+                                                 : MTLStorageModePrivate);
+  return g->depth;
+}
+
+// whether a quad may hide what is under it. the shader has the last word,
+// this only finds what is worth handing it.
+static bool hides(const civue_quad *q, bool image) {
+  u32 kind = (u32)q->params[1];
+
+  if (kind != CIVUE_QUAD_RECT && (kind != CIVUE_QUAD_IMAGE || !image)) {
+    return false;
+  }
+
+  return q->color[3] >= 0.999f && q->params[0] <= 0.5f && q->params[0] >= 0 &&
+         q->params[2] <= 0.5f && q->rect[2] >= 1 && q->rect[3] >= 1;
+}
+
+static void draw(id<MTLRenderCommandEncoder> enc, u32 start, u32 end) {
+  [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip
+          vertexStart:0
+          vertexCount:4
+        instanceCount:end - start
+         baseInstance:start];
+}
+
+// the quads that hide what is under them, before everything else. fills go
+// in runs across batches, an image without a see through pixel with its
+// own batch.
+static void encode_hiding(civue_gfx *g, id<MTLRenderCommandEncoder> enc,
+                          MTLPixelFormat format, const civue_draw_list *list,
+                          u32 width, u32 height) {
+  f32 fills[4] = {(f32)width, (f32)height, 0, 0};
+  f32 images[4] = {(f32)width, (f32)height, 1, 0};
+  // the run of fills not drawn yet, none when empty.
+  u32 from = 0, to = 0;
+
+  [enc setRenderPipelineState:pipeline(g, format, MODE_OPAQUE)];
+  [enc setDepthStencilState:g->hiding];
+
+  for (u32 b = 0; b < list->batches.len; b++) {
+    const civue_batch *batch = &list->batches.v[b];
+    u32 end = b + 1 < list->batches.len ? list->batches.v[b + 1].start
+                                        : list->quads.len;
+    CivueImage *image = batch->texture ? g->uploaded[@(batch->texture)] : nil;
+    bool opaque = image && image->opaque;
+    u32 first = end, last = batch->start;
+
+    // a run never goes across what multiplies or erases, nor across an
+    // image drawn here: its quads would be taken for fills.
+    if (batch->multiply || batch->erase || opaque) {
+      if (to > from) {
+        draw(enc, from, to);
+      }
+
+      from = to = 0;
+    }
+
+    if (batch->multiply || batch->erase) {
+      continue;
+    }
+
+    for (u32 i = batch->start; i < end; i++) {
+      if (hides(&list->quads.v[i], opaque)) {
+        first = MIN(first, i);
+        last = i + 1;
+      }
+    }
+
+    if (last <= first) {
+      continue;
+    }
+
+    if (!opaque) {
+      from = to > from ? from : first;
+      to = last;
+      continue;
+    }
+
+    [enc setVertexBytes:images length:sizeof images atIndex:0];
+    [enc setFragmentTexture:g->images[@(batch->texture)] atIndex:1];
+    draw(enc, first, last);
+    [enc setVertexBytes:fills length:sizeof fills atIndex:0];
+  }
+
+  if (to > from) {
+    draw(enc, from, to);
+  }
+}
+
 void civue_gfx_encode(civue_gfx *g, void *command_buffer, void *target_texture,
                       u32 width, u32 height, const civue_draw_list *list,
                       const civue_color *clear) {
@@ -516,6 +656,11 @@ void civue_gfx_encode(civue_gfx *g, void *command_buffer, void *target_texture,
   else {
     att.loadAction = MTLLoadActionLoad;
   }
+
+  rp.depthAttachment.texture = depth_of(g, target);
+  rp.depthAttachment.loadAction = MTLLoadActionClear;
+  rp.depthAttachment.storeAction = MTLStoreActionDontCare;
+  rp.depthAttachment.clearDepth = 1;
 
   MTLPixelFormat format = target.pixelFormat;
   id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
@@ -552,16 +697,23 @@ void civue_gfx_encode(civue_gfx *g, void *command_buffer, void *target_texture,
     }
 
     f32 globals[4] = {(f32)width, (f32)height, 0, 0};
-    [enc setRenderPipelineState:pipeline(g, format, 0)];
     [enc setVertexBytes:globals length:sizeof globals atIndex:0];
-    [enc setFragmentBytes:globals length:sizeof globals atIndex:0];
     [enc setVertexBuffer:quads offset:0 atIndex:QUAD_SLOT];
+    [enc setFragmentBuffer:quads offset:0 atIndex:QUAD_SLOT];
     [enc setFragmentTexture:g->atlas_texture ?: g->dummy atIndex:0];
+    [enc setFragmentTexture:g->dummy atIndex:1];
     [enc setFragmentTexture:g->color_atlas_texture ?: g->dummy atIndex:2];
     [enc setFragmentSamplerState:g->linear atIndex:0];
     [enc setFragmentSamplerState:g->nearest atIndex:1];
 
+    if (list->quads.len < DEPTH_QUADS) {
+      encode_hiding(g, enc, format, list, width, height);
+    }
+
     u8 mode = 0;
+
+    [enc setRenderPipelineState:pipeline(g, format, 0)];
+    [enc setDepthStencilState:g->hidden];
 
     for (u32 b = 0; b < list->batches.len; b++) {
       const civue_batch *batch = &list->batches.v[b];
@@ -577,11 +729,7 @@ void civue_gfx_encode(civue_gfx *g, void *command_buffer, void *target_texture,
       id<MTLTexture> image =
         batch->texture ? g->images[@(batch->texture)] : nil;
       [enc setFragmentTexture:image ?: g->dummy atIndex:1];
-      [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip
-              vertexStart:0
-              vertexCount:4
-            instanceCount:end - batch->start
-             baseInstance:batch->start];
+      draw(enc, batch->start, end);
     }
   }
 

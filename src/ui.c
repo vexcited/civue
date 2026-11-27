@@ -144,6 +144,7 @@ void civue_begin_frame(civue_ui *ui, civue_vec2 size, f32 scale,
   ui->focus_alive = false;
   ui->focus_kept = false;
   ui->secure_input = false;
+  ui->caret = (civue_rect){};
   ui->frames++;
   ui->rerun = ui->frames > 1 && !ui->settled;
   ui->scroll_areas = 0;
@@ -819,7 +820,11 @@ static void label_combo(civue_bytes *out, const char *s, usize n) {
     buf_puts(out, "Ctrl+");
   }
   if (ctrl) {
+#ifdef _WIN32
+    buf_puts(out, "Win+");
+#else
     buf_puts(out, "Super+");
+#endif
   }
   if (alt) {
     buf_puts(out, "Alt+");

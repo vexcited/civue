@@ -1,6 +1,10 @@
 #ifndef CIVUE_INTERNAL_H
 #define CIVUE_INTERNAL_H
 
+#ifdef _WIN32
+#include "windows/posix.h"
+#endif
+
 #include <civue/base.h>
 
 #include <cilo/cilo.h>

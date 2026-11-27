@@ -244,6 +244,9 @@ struct civue_ui {
   bool focus_kept;
   // the focused widget takes a secret, like a password.
   bool secure_input;
+  // where the focused text's caret was drawn this frame, empty for none: an
+  // input method's candidates open there.
+  civue_rect caret;
   // the control the keyboard moved to, a focus ring around it.
   civue_id ring;
   bool has_ring_rect;
@@ -264,6 +267,8 @@ struct civue_ui {
   bool toggle_maximize, toggle_fullscreen;
   // the room kept for the window's buttons at the start of the title bar.
   float titlebar_inset;
+  // and at its end, where windows has them.
+  float titlebar_end_inset;
   // how tall the window's title bar is, the app's tab bar going in it. 0
   // for a window with the system's own.
   float titlebar_height;

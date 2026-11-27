@@ -152,9 +152,9 @@ vec4 shade() {
         }
         // canvas tiles cover their pixels whole, so neighbors meet seamlessly.
         if (i_params.x > 0.5) {
-            return c * i_color.a;
+            return c * i_color;
         }
-        return c * i_color.a * coverage(p, i_rect, i_radii);
+        return c * i_color * coverage(p, i_rect, i_radii);
     }
     if (kind == LINE) {
         // radii holds the segment's ends, params.x its width.

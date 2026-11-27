@@ -4,9 +4,12 @@
 #include <fcntl.h>
 #include <stdckdint.h>
 #include <stddefer.h>
-#include <pwd.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#ifndef _WIN32
+#include <pwd.h>
+#endif
 
 #ifdef __APPLE__
 #include <mach/mach_time.h>
@@ -99,11 +102,16 @@ char *civue__xstrndup(const char *s, usize n) {
 char *civue__xfmt(const char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  char *out = nullptr;
-  if (vasprintf(&out, fmt, ap) < 0) {
+  va_list again;
+  va_copy(again, ap);
+  int n = vsnprintf(nullptr, 0, fmt, ap);
+  va_end(ap);
+  if (n < 0) {
     die("out of memory formatting");
   }
-  va_end(ap);
+  char *out = xmalloc((usize)n + 1);
+  vsnprintf(out, (usize)n + 1, fmt, again);
+  va_end(again);
   return out;
 }
 
@@ -218,7 +226,7 @@ size_t civue_utf8_put(char out[4], uint32_t cp) {
 /* ========================================================================== */
 
 bool civue__file_read(const char *path, civue_bytes *out) {
-  int fd = open(path, O_RDONLY);
+  int fd = open(path, O_RDONLY | O_CLOEXEC);
   if (fd < 0) {
     return false;
   }
@@ -250,9 +258,15 @@ const char *civue__home_dir() {
   static const char *home;
   if (!home) {
     const char *h = getenv("HOME");
+#ifdef _WIN32
+    if (!h || !*h) {
+      h = getenv("USERPROFILE");
+    }
+#else
     if (!h || !*h) {
       h = getpwuid(getuid())->pw_dir;
     }
+#endif
     home = xstrdup(h);
   }
   return home;

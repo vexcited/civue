@@ -166,6 +166,12 @@ void civue_dl_color_glyph(civue_draw_list *d, civue_rect r, const float uv[4],
 void civue_dl_image(civue_draw_list *d, civue_texture t, civue_rect r,
                     const float uv[4], float opacity, float radius,
                     bool nearest);
+// the same, each of its pixels times `tint`, premultiplied as they are: red,
+// green, blue and alpha. an alpha of zero adds the image to what is under
+// it.
+void civue_dl_image_tinted(civue_draw_list *d, civue_texture t, civue_rect r,
+                           const float uv[4], const float tint[4],
+                           bool nearest);
 // an opaque rect of a canvas, with its pixel grid when given.
 void civue_dl_rect_grid(civue_draw_list *d, civue_rect r, civue_color fill,
                         const civue_pixel_grid *grid);
