@@ -327,6 +327,15 @@ void civue_dl_image(civue_draw_list *d, civue_texture t, civue_rect r,
   push(d, q, t);
 }
 
+void civue_dl_image_tinted(civue_draw_list *d, civue_texture t, civue_rect r,
+                           const f32 uv[4], const f32 tint[4], bool nearest) {
+  civue_quad q = {.color = {tint[0], tint[1], tint[2], tint[3]},
+                  .params = {0, CIVUE_QUAD_IMAGE, 0, nearest}};
+  set_rect(&q, r);
+  memcpy(q.uv, uv, sizeof q.uv);
+  push(d, q, t);
+}
+
 // the origin moved by whole units next to the screen, positions far from
 // the origin lose their fractions in f32.
 static void encode_grid(const civue_pixel_grid *g, f32 out[4]) {
