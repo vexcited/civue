@@ -255,7 +255,7 @@ typedef struct {
 } civue_tooltip_place;
 
 // whether the tooltip `id` of what answered `resp` shows: after half a second
-// of hover without dragging.
+// of hover without dragging, at once when the pointer comes from another.
 bool civue_tooltip(civue_ui *ui, civue_id id, const civue_response *resp);
 // where a tooltip of `size` goes by `anchor`, `gap` from it and from the
 // window's edges: below it, above it when asked or when there is no room below,

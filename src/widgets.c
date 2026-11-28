@@ -712,22 +712,35 @@ typedef struct {
   f64 since;
 } TooltipState;
 
+// when and in which pass a tooltip last showed, any of them.
+typedef struct {
+  f64 at;
+  u64 pass;
+} TooltipWarm;
+
 bool civue_tooltip(civue_ui *ui, civue_id id, const civue_response *resp) {
   TooltipState *s =
     civue_memory(ui, civue_ids(id, "tooltip"), sizeof(TooltipState), nullptr);
+  TooltipWarm *warm =
+    civue_memory(ui, civue_ids(0, "tooltips"), sizeof(TooltipWarm), nullptr);
   if (!resp->hovered || resp->dragging) {
     s->active = false;
     return false;
   }
   if (!s->active) {
+    // the pointer moving on from a tooltip shows the next one at once.
+    bool warmed = warm->pass && (ui->frames - warm->pass <= 1 ||
+                                 ui->now - warm->at < .3);
     s->active = true;
-    s->since = ui->now;
+    s->since = warmed ? ui->now - .5 : ui->now;
   }
   f64 shown = ui->now - s->since;
   if (shown < .5) {
     civue_request_repaint_after(ui, .5 - shown);
     return false;
   }
+  warm->at = ui->now;
+  warm->pass = ui->frames;
   return true;
 }
 
