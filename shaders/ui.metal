@@ -98,6 +98,7 @@ constant uint MASK = 2u;
 constant uint IMAGE = 3u;
 constant uint LINE = 4u;
 constant uint COLOR_GLYPH = 5u;
+constant uint ARC = 6u;
 
 static bool any_set(float4 v) {
     return max(max(v.x, v.y), max(v.z, v.w)) > 0.0;
@@ -336,6 +337,28 @@ static float shadow(float2 local, float4 rect, float sigma, float corner) {
     return v;
 }
 
+// how much of a pixel a part of a ring covers: radii holds where it starts
+// and how far it goes, in turns clockwise from its top, and how thick it is
+// of its radius. it fades from its color at the top to its border at the
+// bottom.
+static float4 arc(const device Quad& in, float2 p) {
+    float outer = in.rect.z * 0.5;
+    float2 d = p - in.rect.xy - outer;
+    float r = length(d);
+    float inner = outer * (1.0 - in.radii.z);
+    float a = clamp(0.5 + outer - r, 0.0, 1.0) * clamp(0.5 + r - inner, 0.0, 1.0);
+    float sweep = in.radii.y;
+    if (sweep < 1.0) {
+        float t = fract(atan2(d.x, -d.y) * 0.15915494 - in.radii.x);
+        float e = abs(t - sweep);
+        float near = min(min(t, 1.0 - t), min(e, 1.0 - e));
+        float side = t <= sweep ? near : -near;
+        a *= clamp(0.5 + side * 6.2831853 * r, 0.0, 1.0);
+    }
+    float down = clamp((p.y - in.rect.y) / in.rect.w, 0.0, 1.0);
+    return mix(in.color, in.border, down) * a;
+}
+
 // every kind in full.
 static float4 shade(
     const device Quad& in,
@@ -351,6 +374,9 @@ static float4 shade(
     if (kind == SHADOW) {
         return in.color * shadow(p, in.rect, max(in.params.z, 0.01), in.radii.x);
     }
+    if (kind == ARC) {
+        return arc(in, p);
+    }
     if (kind == MASK) {
         float a = mask_atlas.sample(nearest_sampler, uv, level(0.0)).r;
         // a gamma under 1 thickens light text on dark backgrounds, like
@@ -364,6 +390,10 @@ static float4 shade(
     }
     if (kind == IMAGE) {
         float4 c = in.params.w > 0.5 ? image.sample(nearest_sampler, uv, level(0.0)) : image.sample(linear_sampler, uv, level(0.0));
+        // revealed: its red is when a pixel comes, its green how much.
+        if (in.params.z > 1.5) {
+            return c.r < in.border.x ? in.color * c.g : float4(0.0);
+        }
         if (in.params.z > 0.5) {
             return pixel_grid(c, p, in.border);
         }

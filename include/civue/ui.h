@@ -511,6 +511,60 @@ static inline void civue__overlay_end(civue_scope *s) {
   for (civue_scope CIVUE__SCOPE                                      \
        [[gnu::cleanup(civue__clip_end)]] = civue__clip_begin(ui, r); \
        CIVUE__SCOPE.open; CIVUE__SCOPE.open = false)
+
+typedef struct {
+  civue_ui *ui;
+  bool open;
+  float was;
+} civue_fade_scope;
+
+static inline civue_fade_scope civue__fade_begin(civue_ui *ui, float opacity) {
+  civue_draw_list *d = civue_list(ui);
+  float was = civue_dl_opacity(d);
+
+  civue_dl_set_opacity(d, was * opacity);
+  return (civue_fade_scope){.ui = ui, .open = true, .was = was};
+}
+
+static inline void civue__fade_end(civue_fade_scope *s) {
+  civue_dl_set_opacity(civue_list(s->ui), s->was);
+}
+
+// draws its body at `opacity`, times the one it is drawn in, all of it alike.
+// an overlay opened in it starts again at its own.
+#define CIVUE_FADED(ui, opacity)                                         \
+  for (civue_fade_scope CIVUE__SCOPE [[gnu::cleanup(civue__fade_end)]] = \
+         civue__fade_begin(ui, opacity);                                 \
+       CIVUE__SCOPE.open; CIVUE__SCOPE.open = false)
+
+typedef struct {
+  civue_ui *ui;
+  bool open;
+  civue_zoom was;
+} civue_zoom_scope;
+
+static inline civue_zoom_scope civue__zoom_begin(civue_ui *ui, float scale,
+                                                 civue_vec2 pivot) {
+  civue_draw_list *d = civue_list(ui);
+  civue_zoom was = civue_dl_zoom(d);
+  civue_vec2 at = {pivot.x * ui->scale, pivot.y * ui->scale};
+
+  civue_dl_set_zoom(d, civue_zoom_around(was, scale, at));
+  return (civue_zoom_scope){.ui = ui, .open = true, .was = was};
+}
+
+static inline void civue__zoom_end(civue_zoom_scope *s) {
+  civue_dl_set_zoom(civue_list(s->ui), s->was);
+}
+
+// draws its body `scale` times as big around `pivot`, a point of the window,
+// as css's scale with a transform origin. where its nodes answer the pointer
+// stays. an overlay opened in it starts again at its own.
+#define CIVUE_ZOOMED(ui, scale, pivot)                                   \
+  for (civue_zoom_scope CIVUE__SCOPE [[gnu::cleanup(civue__zoom_end)]] = \
+         civue__zoom_begin(ui, scale, pivot);                            \
+       CIVUE__SCOPE.open; CIVUE__SCOPE.open = false)
+
 // draws its body above everything else, for menus and popovers.
 #define CIVUE_OVERLAY(ui)                                               \
   for (civue_scope CIVUE__SCOPE                                         \

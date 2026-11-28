@@ -27,6 +27,7 @@ const float MASK = 2.0;
 const float IMAGE = 3.0;
 const float LINE = 4.0;
 const float COLOR_GLYPH = 5.0;
+const float ARC = 6.0;
 
 // figma's pixel grid, from its canvas shader: the first pixel after each
 // canvas unit's edge moves 0.05 darker when light, lighter towards white
@@ -125,6 +126,28 @@ float shadow(vec2 local, vec4 rect, float sigma, float corner) {
     return v;
 }
 
+// how much of a pixel a part of a ring covers: radii holds where it starts
+// and how far it goes, in turns clockwise from its top, and how thick it is
+// of its radius. it fades from its color at the top to its border at the
+// bottom.
+vec4 arc(vec2 p) {
+    float outer = i_rect.z * 0.5;
+    vec2 d = p - i_rect.xy - outer;
+    float r = length(d);
+    float inner = outer * (1.0 - i_radii.z);
+    float a = clamp(0.5 + outer - r, 0.0, 1.0) * clamp(0.5 + r - inner, 0.0, 1.0);
+    float sweep = i_radii.y;
+    if (sweep < 1.0) {
+        float t = fract(atan(d.x, -d.y) * 0.15915494 - i_radii.x);
+        float e = abs(t - sweep);
+        float near = min(min(t, 1.0 - t), min(e, 1.0 - e));
+        float side = t <= sweep ? near : -near;
+        a *= clamp(0.5 + side * 6.2831853 * r, 0.0, 1.0);
+    }
+    float down = clamp((p.y - i_rect.y) / i_rect.w, 0.0, 1.0);
+    return mix(i_color, i_border, down) * a;
+}
+
 vec4 shade() {
     vec2 p = i_local;
     if (p.x < i_clip.x || p.y < i_clip.y || p.x >= i_clip.z || p.y >= i_clip.w) {
@@ -133,6 +156,9 @@ vec4 shade() {
     float kind = i_params.y;
     if (kind == SHADOW) {
         return i_color * shadow(p, i_rect, max(i_params.z, 0.01), i_radii.x);
+    }
+    if (kind == ARC) {
+        return arc(p);
     }
     if (kind == MASK) {
         float a = textureLod(sampler2D(mask_atlas, nearest_sampler), i_uv, 0.0).r;
@@ -147,6 +173,10 @@ vec4 shade() {
     }
     if (kind == IMAGE) {
         vec4 c = i_params.w > 0.5 ? textureLod(sampler2D(image, nearest_sampler), i_uv, 0.0) : textureLod(sampler2D(image, linear_sampler), i_uv, 0.0);
+        // revealed: its red is when a pixel comes, its green how much.
+        if (i_params.z > 1.5) {
+            return c.r < i_border.x ? i_color * c.g : vec4(0.0);
+        }
         if (i_params.z > 0.5) {
             return pixel_grid(c, p, i_border);
         }

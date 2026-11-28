@@ -683,6 +683,33 @@ static f32 line(const civue_quad *q, f32 x, f32 y) {
   return clamp01(width * 0.5f + 0.5f - sqrtf(dx * dx + dy * dy));
 }
 
+// how much of a pixel a part of a ring covers, as ui.metal's arc. its color
+// fades from the top down into `out`.
+static f32 arc(const civue_quad *q, f32 x, f32 y, f32 out[4]) {
+  f32 outer = q->rect[2] * 0.5f;
+  f32 dx = x - q->rect[0] - outer, dy = y - q->rect[1] - outer;
+  f32 r = sqrtf(dx * dx + dy * dy);
+  f32 inner = outer * (1 - q->radii[2]);
+  f32 a = clamp01(0.5f + outer - r) * clamp01(0.5f + r - inner);
+  f32 sweep = q->radii[1];
+
+  if (sweep < 1) {
+    f32 t = atan2f(dx, -dy) * 0.15915494f - q->radii[0];
+    t -= floorf(t);
+    f32 e = fabsf(t - sweep);
+    f32 near = fminf(fminf(t, 1 - t), fminf(e, 1 - e));
+    a *= clamp01(0.5f + (t <= sweep ? near : -near) * 6.2831853f * r);
+  }
+
+  f32 down = clamp01((y - q->rect[1]) / q->rect[3]);
+
+  for (u32 i = 0; i < 4; i++) {
+    out[i] = q->color[i] + (q->border[i] - q->color[i]) * down;
+  }
+
+  return a;
+}
+
 typedef struct {
   const civue_surface *s;
   // the atlases' pixels, null when they have none yet.
@@ -878,6 +905,13 @@ static bool shade_kind(const Raster *r, const civue_quad *q, f32 x, f32 y,
       scaled(q->color, line(q, x, y), out);
       return true;
 
+    case CIVUE_QUAD_ARC: {
+      f32 c[4];
+      f32 a = arc(q, x, y, c);
+      scaled(c, a, out);
+      return true;
+    }
+
     case CIVUE_QUAD_RECT:
       shade_rect(q, x, y, out);
       return true;
@@ -885,6 +919,12 @@ static bool shade_kind(const Raster *r, const civue_quad *q, f32 x, f32 y,
     case CIVUE_QUAD_IMAGE: {
       f32 c[4];
       image_at(r, q, x, y, c);
+
+      // revealed: its red is when a pixel comes, its green how much.
+      if (q->params[2] > 1.5f) {
+        scaled(q->color, c[0] < q->border[0] ? c[1] : 0, out);
+        return true;
+      }
 
       if (q->params[2] > 0.5f) {
         pixel_grid(c, x, y, q->border, out);

@@ -11,6 +11,8 @@ void civue_dl_clear(civue_draw_list *d) {
   d->rounds.len = 0;
   d->multiply = false;
   d->erase = false;
+  d->fade = 0;
+  d->zoom = (civue_zoom){};
   memset(d->turn, 0, sizeof d->turn);
   d->keep_hidden = false;
   d->cuts = 0;
@@ -39,7 +41,25 @@ civue_rect civue_dl_clip(const civue_draw_list *d) {
   return d->clips.len ? vec_last(&d->clips) : rect(-1e9, -1e9, 1e9, 1e9);
 }
 
+static bool zoomed(const civue_draw_list *d) {
+  civue_zoom z = d->zoom;
+
+  return z.scale != 0 && (z.scale != 1 || z.x != 0 || z.y != 0);
+}
+
+static civue_rect zoom_rect(const civue_draw_list *d, civue_rect r) {
+  civue_zoom z = d->zoom;
+
+  if (!zoomed(d)) {
+    return r;
+  }
+
+  return rect(z.x + r.x0 * z.scale, z.y + r.y0 * z.scale, z.x + r.x1 * z.scale,
+              z.y + r.y1 * z.scale);
+}
+
 void civue_dl_push_clip(civue_draw_list *d, civue_rect r) {
+  r = zoom_rect(d, r);
   civue_rect c = civue_dl_clip(d);
   if (r.x0 < c.x0 || r.y0 < c.y0 || r.x1 > c.x1 || r.y1 > c.y1) {
     d->cuts++;
@@ -59,11 +79,14 @@ civue_round civue_dl_round(const civue_draw_list *d) {
 }
 
 void civue_dl_push_round(civue_draw_list *d, civue_rect r, const f32 radii[4]) {
+  r = zoom_rect(d, r);
   civue_round round = {
     .rect = {(f32)r.x0, (f32)r.y0, (f32)(r.x1 - r.x0), (f32)(r.y1 - r.y0)},
   };
 
-  memcpy(round.radii, radii, sizeof round.radii);
+  for (u32 i = 0; i < 4; i++) {
+    round.radii[i] = radii[i] * (zoomed(d) ? d->zoom.scale : 1);
+  }
   // what is recorded under it only goes back where it was.
   d->cuts++;
   vec_push(&d->rounds, round);
@@ -100,6 +123,91 @@ void civue_dl_set_erase(civue_draw_list *d, bool on) {
   d->erase = on;
 }
 
+void civue_dl_set_opacity(civue_draw_list *d, f32 opacity) {
+  d->fade = 1 - fminf(fmaxf(opacity, 0), 1);
+}
+
+f32 civue_dl_opacity(const civue_draw_list *d) {
+  return 1 - d->fade;
+}
+
+void civue_dl_set_zoom(civue_draw_list *d, civue_zoom zoom) {
+  d->zoom = zoom;
+}
+
+civue_zoom civue_dl_zoom(const civue_draw_list *d) {
+  return d->zoom.scale != 0 ? d->zoom : (civue_zoom){.scale = 1};
+}
+
+civue_zoom civue_zoom_around(civue_zoom z, f32 scale, civue_vec2 pivot) {
+  if (z.scale == 0) {
+    z = (civue_zoom){.scale = 1};
+  }
+
+  // around the pivot first, then as `z` does.
+  f32 x = (f32)pivot.x * (1 - scale), y = (f32)pivot.y * (1 - scale);
+
+  return (civue_zoom){z.scale * scale, z.x + z.scale * x, z.y + z.scale * y};
+}
+
+// a quad's geometry, by the list's zoom.
+static void zoom(const civue_draw_list *d, civue_quad *q) {
+  civue_zoom z = d->zoom;
+  f32 s = z.scale;
+
+  if (!zoomed(d)) {
+    return;
+  }
+
+  q->rect[0] = z.x + q->rect[0] * s, q->rect[1] = z.y + q->rect[1] * s;
+  q->rect[2] *= s, q->rect[3] *= s;
+
+  // a line's radii are its ends.
+  if (q->params[1] == CIVUE_QUAD_LINE) {
+    q->radii[0] = z.x + q->radii[0] * s, q->radii[1] = z.y + q->radii[1] * s;
+    q->radii[2] = z.x + q->radii[2] * s, q->radii[3] = z.y + q->radii[3] * s;
+    q->params[0] *= s;
+  }
+  // an arc's are turns and a part of its radius.
+  else if (q->params[1] != CIVUE_QUAD_ARC) {
+    for (u32 i = 0; i < 4; i++) {
+      q->radii[i] *= s;
+    }
+  }
+
+  if (q->params[1] == CIVUE_QUAD_RECT && q->params[0] > 0) {
+    q->params[0] *= s;
+  }
+  // a border of its own width on each side.
+  else if (q->params[1] == CIVUE_QUAD_RECT && q->params[0] < 0) {
+    for (u32 i = 0; i < 4; i++) {
+      q->uv[i] *= s;
+    }
+  }
+  else if (q->params[1] == CIVUE_QUAD_SHADOW) {
+    q->params[2] *= s;
+  }
+
+  if (q->turn[0] != 0 || q->turn[1] != 0) {
+    q->turn[2] = z.x + q->turn[2] * s, q->turn[3] = z.y + q->turn[3] * s;
+  }
+}
+
+// a quad's colors, premultiplied, at the list's opacity.
+static void fade(const civue_draw_list *d, civue_quad *q) {
+  if (d->fade <= 0) {
+    return;
+  }
+
+  // the border of an image revealed is its progress.
+  bool progress = q->params[1] == CIVUE_QUAD_IMAGE && q->params[2] > 1.5f;
+
+  for (u32 i = 0; i < 4; i++) {
+    q->color[i] *= 1 - d->fade;
+    q->border[i] *= progress ? 1 : 1 - d->fade;
+  }
+}
+
 // whether the last batch blends the way the list does now.
 static bool same_blend(const civue_batch *b, const civue_draw_list *d) {
   return b->multiply == d->multiply && b->erase == d->erase;
@@ -116,10 +224,12 @@ static void set_rect(civue_quad *q, civue_rect r) {
 
 static void push(civue_draw_list *d, civue_quad q, civue_texture texture) {
   civue_rect c = civue_dl_clip(d);
+  fade(d, &q);
   q.clip[0] = (f32)c.x0, q.clip[1] = (f32)c.y0;
   q.clip[2] = (f32)c.x1, q.clip[3] = (f32)c.y1;
   set_round(d, &q);
   memcpy(q.turn, d->turn, sizeof q.turn);
+  zoom(d, &q);
   bool turned = d->turn[0] != 0 || d->turn[1] != 0;
   // nothing visible outside the clip.
   f32 m = q.params[1] == CIVUE_QUAD_SHADOW ? q.params[2] * 3 : 0;
@@ -197,6 +307,86 @@ void civue_dl_replay(civue_draw_list *d, const civue_quad *quads, u32 count,
   }
 }
 
+static f32 fade_at(f32 y, f32 y0, f32 from, f32 y1, f32 to) {
+  f32 t = y1 > y0 ? fminf(fmaxf((y - y0) / (y1 - y0), 0), 1) : 0;
+
+  return fminf(fmaxf(from + (to - from) * t, 0), 1);
+}
+
+void civue_dl_fade_down(civue_draw_list *d, u32 first, f32 y0, f32 from,
+                        f32 y1, f32 to, f32 step) {
+  u32 count = d->quads.len > first ? d->quads.len - first : 0;
+
+  if (!count) {
+    return;
+  }
+
+  civue_quad *was = own_new(sizeof *was * count);
+  u32 batch = 0;
+
+  memcpy(was, d->quads.v + first, sizeof *was * count);
+  d->quads.len = first;
+
+  while (batch < d->batches.len && d->batches.v[batch].start < first) {
+    batch++;
+  }
+
+  for (u32 i = 0; i < count; i++) {
+    // the batches that started at it start at what it becomes.
+    for (; batch < d->batches.len && d->batches.v[batch].start <= first + i;
+         batch++) {
+      d->batches.v[batch].start = d->quads.len;
+    }
+
+    civue_quad q = was[i];
+    bool turned = q.turn[0] != 0 || q.turn[1] != 0;
+    f32 m = q.params[1] == CIVUE_QUAD_SHADOW ? q.params[2] * 3 : 0;
+    f32 top = fmaxf(q.rect[1] - m, q.clip[1]);
+    f32 bottom = fminf(q.rect[1] + q.rect[3] + m, q.clip[3]);
+    bool same = fabsf(fade_at(top, y0, from, y1, to) -
+                      fade_at(bottom, y0, from, y1, to)) < 0.002f;
+    u32 bands = turned || same || !(step > 0) || bottom - top <= step
+                  ? 1
+                  : (u32)ceilf((bottom - top) / step);
+    bool progress = q.params[1] == CIVUE_QUAD_IMAGE && q.params[2] > 1.5f;
+
+    for (u32 b = 0; b < bands; b++) {
+      civue_quad cut = q;
+      f32 a = top, z = bottom;
+
+      if (bands > 1) {
+        a = b ? roundf(top + (bottom - top) * (f32)b / (f32)bands) : q.clip[1];
+        z = b + 1 < bands
+              ? roundf(top + (bottom - top) * (f32)(b + 1) / (f32)bands)
+              : q.clip[3];
+        cut.clip[1] = a;
+        cut.clip[3] = z;
+        a = fmaxf(a, top);
+        z = fminf(z, bottom);
+      }
+
+      f32 opacity = fade_at((a + z) / 2, y0, from, y1, to);
+
+      if (opacity <= 0 || cut.clip[3] <= cut.clip[1]) {
+        continue;
+      }
+
+      for (u32 k = 0; k < 4; k++) {
+        cut.color[k] *= opacity;
+        cut.border[k] *= progress ? 1 : opacity;
+      }
+
+      vec_push(&d->quads, cut);
+    }
+  }
+
+  for (; batch < d->batches.len; batch++) {
+    d->batches.v[batch].start = d->quads.len;
+  }
+
+  own_free(was);
+}
+
 void civue_dl_shift(civue_draw_list *d, f32 dx, f32 dy) {
   vec_each(&d->quads, q) {
     q->rect[0] += dx, q->rect[1] += dy;
@@ -259,6 +449,23 @@ void civue_dl_line(civue_draw_list *d, civue_vec2 a, civue_vec2 b, f32 width,
   push(d, q, 0);
 }
 
+void civue_dl_arc(civue_draw_list *d, civue_vec2 center, f32 radius,
+                  f32 thickness, f32 start, f32 sweep, civue_color top,
+                  civue_color bottom) {
+  if (sweep <= 0 || radius <= 0) {
+    return;
+  }
+
+  civue_rect r = rect(center.x - radius, center.y - radius, center.x + radius,
+                      center.y + radius);
+  civue_quad q = {.radii = {start - floorf(start), sweep, thickness},
+                  .params = {0, CIVUE_QUAD_ARC}};
+  set_rect(&q, r);
+  premul(top, q.color);
+  premul(bottom, q.border);
+  push(d, q, 0);
+}
+
 void civue_dl_mask(civue_draw_list *d, civue_rect r, const f32 uv[4],
                    civue_color color, f32 gamma) {
   civue_quad q = {.params = {0, CIVUE_QUAD_MASK, gamma}};
@@ -279,6 +486,7 @@ void civue_dl_masks(civue_draw_list *d, const civue_glyph_quad *quads,
   q.clip[0] = (f32)c.x0, q.clip[1] = (f32)c.y0;
   q.clip[2] = (f32)c.x1, q.clip[3] = (f32)c.y1;
   premul(color, q.color);
+  fade(d, &q);
   set_round(d, &q);
   memcpy(q.turn, d->turn, sizeof q.turn);
   bool all = d->keep_hidden || d->turn[0] != 0 || d->turn[1] != 0;
@@ -290,16 +498,20 @@ void civue_dl_masks(civue_draw_list *d, const civue_glyph_quad *quads,
   civue_quad *out = d->quads.v + d->quads.len;
 
   for (u32 i = 0; i < count; i++) {
-    const f32 *r = quads[i].rect;
+    civue_quad g = q;
+
+    memcpy(g.rect, quads[i].rect, sizeof g.rect);
+    zoom(d, &g);
+
+    const f32 *r = g.rect;
     // nothing visible outside the clip.
-    if (!all && (r[0] >= q.clip[2] || r[1] >= q.clip[3] ||
-                 r[0] + r[2] <= q.clip[0] || r[1] + r[3] <= q.clip[1])) {
+    if (!all && (r[0] >= g.clip[2] || r[1] >= g.clip[3] ||
+                 r[0] + r[2] <= g.clip[0] || r[1] + r[3] <= g.clip[1])) {
       continue;
     }
 
-    memcpy(q.rect, r, sizeof q.rect);
-    memcpy(q.uv, quads[i].uv, sizeof q.uv);
-    *out++ = q;
+    memcpy(g.uv, quads[i].uv, sizeof g.uv);
+    *out++ = g;
   }
 
   d->quads.len = (u32)(out - d->quads.v);
@@ -331,6 +543,18 @@ void civue_dl_image_tinted(civue_draw_list *d, civue_texture t, civue_rect r,
                            const f32 uv[4], const f32 tint[4], bool nearest) {
   civue_quad q = {.color = {tint[0], tint[1], tint[2], tint[3]},
                   .params = {0, CIVUE_QUAD_IMAGE, 0, nearest}};
+  set_rect(&q, r);
+  memcpy(q.uv, uv, sizeof q.uv);
+  push(d, q, t);
+}
+
+// the kind of an image quad is 2 here, past the 1 of a pixel grid, and the
+// progress is kept where a grid keeps its origin.
+void civue_dl_image_reveal(civue_draw_list *d, civue_texture t, civue_rect r,
+                           const f32 uv[4], const f32 color[4], f32 progress) {
+  civue_quad q = {.color = {color[0], color[1], color[2], color[3]},
+                  .border = {progress},
+                  .params = {0, CIVUE_QUAD_IMAGE, 2, 0}};
   set_rect(&q, r);
   memcpy(q.uv, uv, sizeof q.uv);
   push(d, q, t);

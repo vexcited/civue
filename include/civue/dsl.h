@@ -22,6 +22,8 @@
 
 #define clipped(r) CIVUE_CLIPPED(CIVUE_DSL_UI, r)
 #define overlay() CIVUE_OVERLAY(CIVUE_DSL_UI)
+#define faded(opacity) CIVUE_FADED(CIVUE_DSL_UI, opacity)
+#define zoomed(scale, pivot) CIVUE_ZOOMED(CIVUE_DSL_UI, scale, pivot)
 #define scrolling(id, r, height, content) \
   CIVUE_SCROLLING(CIVUE_DSL_UI, id, r, height, content)
 

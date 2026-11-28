@@ -23,6 +23,7 @@ enum {
   CIVUE_QUAD_IMAGE = 3,
   CIVUE_QUAD_LINE = 4,
   CIVUE_QUAD_COLOR_GLYPH = 5,
+  CIVUE_QUAD_ARC = 6,
 };
 
 // one quad, the layout the ui shaders read.
@@ -82,6 +83,11 @@ typedef struct {
   bool erase;
 } civue_batch;
 
+// a point p drawn at (x, y) + p * scale, none when scale is 0.
+typedef struct {
+  float scale, x, y;
+} civue_zoom;
+
 typedef struct {
   CIVUE_VEC(civue_quad) quads;
   CIVUE_VEC(civue_batch) batches;
@@ -91,6 +97,10 @@ typedef struct {
   bool multiply;
   // what is pushed takes away what is under it, leaving it see through.
   bool erase;
+  // how much of what is pushed fades away, 0 for none: it is drawn at an
+  // opacity of 1 - fade.
+  float fade;
+  civue_zoom zoom;
   float turn[4];
   // quads the clip hides are kept, for what is recorded to be drawn again
   // somewhere else.
@@ -112,6 +122,13 @@ void civue_dl_replay(civue_draw_list *d, const civue_quad *quads,
                      const civue_round *round_was);
 // moves everything drawn by `dx` and `dy` pixels, clips too.
 void civue_dl_shift(civue_draw_list *d, float dx, float dy);
+// what was drawn from the quad `first` on fades going down as a group
+// would under a vertical gradient: `from` of it at `y0`, `to` at `y1`, and
+// as much as the nearest of them past them. each quad is cut where it
+// changes in bands `step` pixels high, each at the opacity of its middle.
+// one turned only takes that of its middle.
+void civue_dl_fade_down(civue_draw_list *d, uint32_t first, float y0,
+                        float from, float y1, float to, float step);
 // restricts what follows to `r` until civue_dl_pop_clip.
 void civue_dl_push_clip(civue_draw_list *d, civue_rect r);
 void civue_dl_pop_clip(civue_draw_list *d);
@@ -130,6 +147,19 @@ void civue_dl_set_multiply(civue_draw_list *d, bool on);
 // what is pushed next takes away what it covers, like a mask cutting a hole
 // in a window that blends with what is under it.
 void civue_dl_set_erase(civue_draw_list *d, bool on);
+// what is pushed next is drawn at `opacity`, everything of it alike, as a
+// css group with an opacity. what a memo draws again keeps the opacity it was
+// recorded at.
+void civue_dl_set_opacity(civue_draw_list *d, float opacity);
+[[gnu::pure]] float civue_dl_opacity(const civue_draw_list *d);
+// what is pushed next, and the clips pushed under it, is drawn by `zoom`.
+// only the drawing moves, not where things answer the pointer.
+void civue_dl_set_zoom(civue_draw_list *d, civue_zoom zoom);
+// the list's zoom, a scale of 1 for none.
+[[gnu::pure]] civue_zoom civue_dl_zoom(const civue_draw_list *d);
+// `zoom`, then `scale` times as big around `pivot`, in pixels.
+[[gnu::const]] civue_zoom civue_zoom_around(civue_zoom zoom, float scale,
+                                            civue_vec2 pivot);
 
 // a rounded rect, with an inside border when border_width is positive. radii go
 // from the top left clockwise.
@@ -153,6 +183,13 @@ void civue_dl_shadow(civue_draw_list *d, civue_rect r, float radius,
 // an antialiased segment, square ended when `square`.
 void civue_dl_line(civue_draw_list *d, civue_vec2 a, civue_vec2 b, float width,
                    civue_color color, bool square);
+// a part of a ring around `center`, `radius` out and `thickness` of the
+// radius thick, from `start` turns clockwise from its top for `sweep` turns,
+// cut straight at both ends. it goes from `top` at the top of the ring to
+// `bottom` at its bottom.
+void civue_dl_arc(civue_draw_list *d, civue_vec2 center, float radius,
+                  float thickness, float start, float sweep, civue_color top,
+                  civue_color bottom);
 // coverage from the mask atlas at `uv`, tinted. a gamma under 1 thickens it.
 void civue_dl_mask(civue_draw_list *d, civue_rect r, const float uv[4],
                    civue_color color, float gamma);
@@ -172,6 +209,12 @@ void civue_dl_image(civue_draw_list *d, civue_texture t, civue_rect r,
 void civue_dl_image_tinted(civue_draw_list *d, civue_texture t, civue_rect r,
                            const float uv[4], const float tint[4],
                            bool nearest);
+// an image whose red tells when each pixel comes and whose green how much
+// of it there is: the pixels whose red is under `progress` are drawn in
+// `color`, premultiplied, the others not at all.
+void civue_dl_image_reveal(civue_draw_list *d, civue_texture t, civue_rect r,
+                           const float uv[4], const float color[4],
+                           float progress);
 // an opaque rect of a canvas, with its pixel grid when given.
 void civue_dl_rect_grid(civue_draw_list *d, civue_rect r, civue_color fill,
                         const civue_pixel_grid *grid);

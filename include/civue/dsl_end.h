@@ -7,6 +7,8 @@
 #undef xywh
 #undef clipped
 #undef overlay
+#undef faded
+#undef zoomed
 #undef scrolling
 #undef fill
 #undef stroke
