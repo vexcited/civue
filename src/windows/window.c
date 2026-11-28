@@ -107,7 +107,7 @@ static struct {
   civue_rect max_button;
   // the look the frame was last given, -1 for none yet.
   int frame_dark;
-  bool system_dark;
+  bool system_dark, reduce_motion;
   HICON icon_big, icon_small;
   // the display's refresh rate, for when dwm does not say.
   _Atomic u32 hz;
@@ -433,6 +433,13 @@ static civue_vec2 client_point(LPARAM lp) {
 }
 
 // ---- the system's look ----
+
+// windows' "animation effects", off for less motion.
+static bool read_reduce_motion() {
+  BOOL on = TRUE;
+  SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &on, 0);
+  return !on;
+}
 
 static bool read_dark() {
   DWORD light = 1, n = sizeof light;
@@ -1405,6 +1412,7 @@ static void frame() {
   }
 
   ui->system_dark = W.system_dark;
+  ui->reduce_motion = W.reduce_motion;
   ui->window_focused = W.focused;
   ui->screen_known = true;
   ui->screen = rect(0, 0, pw / scale, ph / scale);
@@ -1703,6 +1711,11 @@ static LRESULT handle(HWND h, UINT msg, WPARAM wp, LPARAM lp, bool from_loop) {
     case WM_SETTINGCHANGE:
       if (lp && !wcscmp((const wchar_t *)lp, L"ImmersiveColorSet")) {
         W.system_dark = read_dark();
+        want();
+      }
+
+      if (wp == SPI_SETCLIENTAREAANIMATION) {
+        W.reduce_motion = read_reduce_motion();
         want();
       }
 
@@ -2052,6 +2065,7 @@ void civue_window_run_sized(const civue_window_options *o,
   }
 
   W.system_dark = read_dark();
+  W.reduce_motion = read_reduce_motion();
   W.pace_go = CreateEventW(nullptr, false, false, nullptr);
   W.deadline = CreateWaitableTimerExW(
     nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);

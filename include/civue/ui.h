@@ -210,6 +210,9 @@ struct civue_ui {
   // whether the system looks dark, and this frame does, by `appearance`. the
   // window follows `dark`.
   bool system_dark, dark;
+  // the user asked the system for less motion: what moves should snap where
+  // it goes, what fades may still fade.
+  bool reduce_motion;
   civue_text_system *text;
   civue_icons *icons;
   civue_draw_list base, overlay, combined;

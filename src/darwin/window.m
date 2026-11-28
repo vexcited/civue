@@ -873,6 +873,8 @@ static void frame() {
     }
 
     ui->system_dark = system_dark();
+    ui->reduce_motion =
+      NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion;
     ui->window_focused = W.window.keyWindow;
     ui->screen_known = true;
     ui->screen = may_go_outside() ? screen_around(W.window.screen.visibleFrame)
