@@ -14,6 +14,8 @@ typedef struct {
   const char *const *extensions;
   u32 n;
   bool multiple;
+  // the name a save offers, null for a panel that opens.
+  const char *save;
   civue_strs paths;
   _Atomic bool done;
 } Pick;
@@ -74,8 +76,14 @@ static void ask_portal(GDBusConnection *conn, GMainContext *context,
   g_variant_builder_add(&opts, "{sv}", "handle_token",
                         g_variant_new_string(token));
   g_variant_builder_add(&opts, "{sv}", "modal", g_variant_new_boolean(true));
-  g_variant_builder_add(&opts, "{sv}", "multiple",
-                        g_variant_new_boolean(pick->multiple));
+  if (pick->save) {
+    g_variant_builder_add(&opts, "{sv}", "current_name",
+                          g_variant_new_string(pick->save));
+  }
+  else {
+    g_variant_builder_add(&opts, "{sv}", "multiple",
+                          g_variant_new_boolean(pick->multiple));
+  }
   if (pick->n) {
     GVariantBuilder globs;
     g_variant_builder_init(&globs, G_VARIANT_TYPE("a(us)"));
@@ -100,8 +108,10 @@ static void ask_portal(GDBusConnection *conn, GMainContext *context,
   }
   GVariant *reply = g_dbus_connection_call_sync(
     conn, PORTAL, "/org/freedesktop/portal/desktop",
-    "org.freedesktop.portal.FileChooser", "OpenFile",
-    g_variant_new("(ss@a{sv})", civue_window_handle(), "Open",
+    "org.freedesktop.portal.FileChooser",
+    pick->save ? "SaveFile" : "OpenFile",
+    g_variant_new("(ss@a{sv})", civue_window_handle(),
+                  pick->save ? "Save" : "Open",
                   g_variant_builder_end(&opts)),
     G_VARIANT_TYPE("(o)"), G_DBUS_CALL_FLAGS_NONE, -1, nullptr, nullptr);
   if (reply) {
@@ -145,16 +155,31 @@ static void wait_on_main(void *arg) {
   civue_wait_while(waiting, arg);
 }
 
-civue_strs civue_file_panel_open(const char *const *extensions, u32 n,
-                                 bool multiple) {
-  Pick pick = {.extensions = extensions, .n = n, .multiple = multiple};
+static civue_strs run(Pick *pick) {
   pthread_t thread;
-  if (pthread_create(&thread, nullptr, ask, &pick)) {
+  if (pthread_create(&thread, nullptr, ask, pick)) {
     return (civue_strs){};
   }
   // like the system's panel, the app waits for it, its window still drawn
   // and handling events.
-  civue_on_main(wait_on_main, &pick);
+  civue_on_main(wait_on_main, pick);
   pthread_join(thread, nullptr);
-  return pick.paths;
+  return pick->paths;
+}
+
+civue_strs civue_file_panel_open(const char *const *extensions, u32 n,
+                                 bool multiple) {
+  Pick pick = {.extensions = extensions, .n = n, .multiple = multiple};
+  return run(&pick);
+}
+
+char *civue_file_panel_save(const char *name) {
+  Pick pick = {.save = name ? name : ""};
+  civue_strs paths = run(&pick);
+  char *path = paths.len ? paths.v[0] : nullptr;
+  for (u32 i = 1; i < paths.len; i++) {
+    free(paths.v[i]);
+  }
+  vec_free(&paths);
+  return path;
 }

@@ -561,7 +561,7 @@ endfunction()
 
 set(CIVUE_SOURCES
   src/base.c src/draw.c src/field.c src/icons.c src/images.c src/layout.c
-  src/numfield.c src/raster.c
+  src/numfield.c src/png.c src/raster.c
   src/richedit.c src/richtext.c src/ui.c src/widgets.c src/words.c)
 
 set(CIVUE_DARWIN_SOURCES

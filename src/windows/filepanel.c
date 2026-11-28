@@ -105,3 +105,41 @@ civue_strs civue_file_panel_open(const char *const *extensions, uint32_t n,
   IFileOpenDialog_Release(d);
   return out;
 }
+
+char *civue_file_panel_save(const char *name) {
+  civue__com_init();
+
+  IFileSaveDialog *d = nullptr;
+
+  if (FAILED(CoCreateInstance(&CLSID_FileSaveDialog, nullptr,
+                              CLSCTX_INPROC_SERVER, &IID_IFileSaveDialog,
+                              (void **)&d))) {
+    return nullptr;
+  }
+
+  FILEOPENDIALOGOPTIONS o = 0;
+  IFileSaveDialog_GetOptions(d, &o);
+  IFileSaveDialog_SetOptions(d, o | FOS_FORCEFILESYSTEM | FOS_OVERWRITEPROMPT |
+                                  FOS_PATHMUSTEXIST);
+
+  if (name && *name) {
+    wchar_t *w = civue__wide(name, -1);
+    IFileSaveDialog_SetFileName(d, w);
+    free(w);
+  }
+
+  civue__modal(true);
+  HRESULT shown = IFileSaveDialog_Show(d, civue__hwnd());
+  civue__modal(false);
+
+  IShellItem *item = nullptr;
+  char *path = nullptr;
+
+  if (SUCCEEDED(shown) && SUCCEEDED(IFileSaveDialog_GetResult(d, &item))) {
+    path = path_of(item);
+    IShellItem_Release(item);
+  }
+
+  IFileSaveDialog_Release(d);
+  return path;
+}

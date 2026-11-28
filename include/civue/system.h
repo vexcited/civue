@@ -20,6 +20,9 @@ void civue_clipboard_set_text(const char *s, size_t n);
 void civue_clipboard_set_html(const char *html, const char *text);
 // an image, png bytes.
 void civue_clipboard_set_png(const uint8_t *png, size_t n);
+// an image of any kind civue draws, put as png. false when the bytes are
+// no image.
+bool civue_clipboard_set_image(const uint8_t *bytes, size_t n);
 
 // turns image bytes the app does not read into png or jpeg ones, their mime
 // type set, false when it can't.
@@ -45,6 +48,9 @@ bool civue_pasteboard_holds_other();
 // caller's, empty on cancel.
 civue_strs civue_file_panel_open(const char *const *extensions, uint32_t n,
                                  bool multiple);
+// the system's panel asking where to save a file, `name` offered, waited for
+// like the one that opens. the absolute path, malloc'd, null on cancel.
+char *civue_file_panel_save(const char *name);
 
 // the misspelled words of `text` as code point ranges, start then end.
 civue_u32s civue_spell_misspelled(const char *text);

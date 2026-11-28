@@ -42,3 +42,20 @@ civue_strs civue_file_panel_open(const char *const *extensions, u32 n,
 
   return out;
 }
+
+char *civue_file_panel_save(const char *name) {
+  char *path = nullptr;
+
+  @autoreleasepool {
+    NSSavePanel *panel = NSSavePanel.savePanel;
+
+    panel.nameFieldStringValue = ns_str(name ? name : "");
+    panel.canCreateDirectories = YES;
+
+    if ([panel runModal] == NSModalResponseOK && panel.URL) {
+      path = ns_dup(panel.URL.path);
+    }
+  }
+
+  return path;
+}
