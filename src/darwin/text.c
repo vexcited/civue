@@ -1335,3 +1335,36 @@ void civue_text_draw(civue_text_system *t, civue_draw_list *d,
   f32 gamma = 1 - 0.45f * (0.2126f * run.r + 0.7152f * run.g + 0.0722f * run.b);
   civue_dl_masks(d, t->quads.v, t->quads.len, run, gamma);
 }
+
+bool civue__word_at(const u16 *s, u32 n, u32 at, u32 *from, u32 *to) {
+  CFStringRef text = CFStringCreateWithCharactersNoCopy(
+    nullptr, (const UniChar *)s, n, kCFAllocatorNull);
+
+  if (!text) {
+    return false;
+  }
+
+  defer CFRelease(text);
+
+  // the tokenizer of the system's own double click, which reads the script
+  // and takes its dictionary.
+  CFStringTokenizerRef words = CFStringTokenizerCreate(
+    nullptr, text, CFRangeMake(0, n), kCFStringTokenizerUnitWordBoundary,
+    nullptr);
+
+  if (!words) {
+    return false;
+  }
+
+  defer CFRelease(words);
+
+  if (!CFStringTokenizerGoToTokenAtIndex(words, at)) {
+    return false;
+  }
+
+  CFRange word = CFStringTokenizerGetCurrentTokenRange(words);
+
+  *from = (u32)word.location;
+  *to = (u32)(word.location + word.length);
+  return true;
+}

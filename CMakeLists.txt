@@ -562,7 +562,7 @@ endfunction()
 set(CIVUE_SOURCES
   src/base.c src/draw.c src/field.c src/icons.c src/images.c src/layout.c
   src/numfield.c src/raster.c
-  src/richedit.c src/richtext.c src/ui.c src/widgets.c)
+  src/richedit.c src/richtext.c src/ui.c src/widgets.c src/words.c)
 
 set(CIVUE_DARWIN_SOURCES
   src/darwin/clipboard.m src/darwin/cursors.m src/darwin/filepanel.m
@@ -626,6 +626,17 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
       message(STATUS "civue: no library for ${format}, gdk-pixbuf reads it")
     endif()
   endforeach()
+
+  # the words of chinese, japanese and thai are cut by icu's dictionaries
+  # where it is installed.
+  pkg_check_modules(CIVUE_ICU IMPORTED_TARGET icu-uc)
+
+  if(CIVUE_ICU_FOUND)
+    target_link_libraries(civue PUBLIC PkgConfig::CIVUE_ICU)
+    target_compile_definitions(civue PRIVATE CIVUE_ICU)
+  else()
+    message(STATUS "civue: no icu, a double click takes one ideograph")
+  endif()
 
   # civue_lazy_library(<target> <prefix> <pattern>) has <target> compile
   # against the pkg-config modules found as <prefix> without linking them:

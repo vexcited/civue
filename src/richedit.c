@@ -430,6 +430,18 @@ static civue_vec2 caret_pos(const civue_rich_doc *d, const civue_rich_lay *l,
   return v2(l->boxes.v[k].indent, l->boxes.v[k].y);
 }
 
+// whether the caret of byte `at` ends a wrapped line: the spaces after it
+// hang past the line, and what follows them is on the next one.
+static bool line_ends_at(const civue_rich_doc *d, const civue_rich_lay *l,
+                         u32 at) {
+  u32 next = at;
+  while (next < d->text.len && d->text.v[next] == ' ') {
+    next++;
+  }
+  return next < d->text.len && d->text.v[next] != '\n' &&
+         caret_pos(d, l, next).y != caret_pos(d, l, at).y;
+}
+
 // the byte nearest to point `p` from the origin.
 static u32 hit(const civue_rich_lay *l, civue_vec2 p) {
   u32 k = l->boxes.len - 1;
@@ -489,6 +501,8 @@ static u32 hit(const civue_rich_lay *l, civue_vec2 p) {
 typedef struct {
   bool live;
   u32 anchor, focus;
+  // the press the pointer's selection grows from.
+  civue_text_grip grip;
   // the format of what is typed next after toggling one with no selection,
   // negative for none.
   i32 pending;
@@ -921,6 +935,7 @@ rich_edit_at(civue_ui *ui, civue_id id, civue_vec2 origin, f32 width,
   if (fresh) {
     *st = (Editing){.live = true, .pending = -1, .goal = -1, .blink = ui->now};
     st->anchor = st->focus = d->text.len;
+    st->grip.base = st->grip.from = st->grip.to = d->text.len;
   }
   st->multiline = multiline;
   // the text may have changed under the caret since the last frame.
@@ -930,24 +945,19 @@ rich_edit_at(civue_ui *ui, civue_id id, civue_vec2 origin, f32 width,
   bool touched = false, changed = false;
   if (in->has_mouse && !fresh) {
     civue_vec2 p = v2_sub(in->mouse, origin);
+    const char *text = (const char *)d->text.v;
+    u32 at = hit(&l, p);
+    bool line_end = line_ends_at(d, &l, at);
     if (resp.pressed) {
-      u32 at = hit(&l, p);
-      if (in->clicks >= 2) {
-        st->anchor = word_left(&d->text, at);
-        st->focus = word_right(&d->text, at);
-      }
-      else {
-        st->focus = at;
-        if (!(in->mods & CIVUE_MOD_SHIFT)) {
-          st->anchor = at;
-        }
-      }
+      civue_text_press(&st->grip, text, d->text.len, at, line_end, in->clicks,
+                       in->mods & CIVUE_MOD_SHIFT, &st->anchor, &st->focus);
       st->goal = -1;
       st->pending = -1;
       touched = true;
     }
     else if (resp.dragging) {
-      st->focus = hit(&l, p);
+      civue_text_drag(&st->grip, text, d->text.len, at, line_end, &st->anchor,
+                      &st->focus);
       touched = true;
     }
   }

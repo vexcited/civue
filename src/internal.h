@@ -148,6 +148,11 @@ typedef struct {
 bool civue__image_decode_frames(const u8 *bytes, usize n, u32 max_pixels,
                                 usize max_bytes, civue__frames *out);
 
+// the word around unit `at` of the `n` utf-16 units at `s`, all of a script
+// written without spaces, as the system's dictionaries cut it. false where
+// it has none.
+bool civue__word_at(const u16 *s, u32 n, u32 at, u32 *from, u32 *to);
+
 /* ========================================================================== */
 /* maps, hashing and text.                                                    */
 /* ========================================================================== */

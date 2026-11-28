@@ -17,6 +17,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#ifdef CIVUE_ICU
+#include <unicode/ubrk.h>
+#endif
+
 // horizontal positions a glyph is rasterized at within a pixel.
 constexpr u32 SUBPIXELS = 4;
 constexpr u32 WGHT = 0x77676874;
@@ -1148,4 +1152,33 @@ void civue_text_draw(civue_text_system *t, civue_draw_list *d,
                          {e->uv[0], e->uv[1], e->uv[2], e->uv[3]}};
   }
   civue_dl_masks(d, t->quads.v, t->quads.len, run, gamma_of(run));
+}
+
+// icu's dictionaries where it is installed, the ones chromium cuts these
+// words with too.
+bool civue__word_at(const u16 *s, u32 n, u32 at, u32 *from, u32 *to) {
+#ifdef CIVUE_ICU
+  UErrorCode status = U_ZERO_ERROR;
+  UBreakIterator *words =
+    ubrk_open(UBRK_WORD, "", (const UChar *)s, (i32)n, &status);
+
+  if (U_FAILURE(status) || !words) {
+    return false;
+  }
+
+  i32 end = ubrk_following(words, (i32)at);
+  i32 start = end == UBRK_DONE ? end : ubrk_preceding(words, end);
+
+  ubrk_close(words);
+
+  if (start == UBRK_DONE) {
+    return false;
+  }
+
+  *from = (u32)start;
+  *to = (u32)end;
+  return true;
+#else
+  return false;
+#endif
 }

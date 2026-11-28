@@ -18,6 +18,8 @@ typedef struct {
   civue_rect caret_rect;
   // the caret was moved from outside, the next frame scrolls to it.
   bool follow;
+  // the press the pointer's selection grows from.
+  civue_text_grip grip;
 } Field;
 
 static void drop_field(void *p) {
@@ -109,7 +111,7 @@ static void move(Field *f, u32 to, bool select) {
 
 // where a byte's caret is, its line returned in `line`. at a wrap the caret
 // goes to the start of the next line.
-static f32 caret_x(const civue_text_block *b, u32 byte, u32 *line) {
+f32 civue_text_caret_x(const civue_text_block *b, u32 byte, u32 *line) {
   f32 x = 0;
   *line = 0;
   for (u32 i = 0; i < b->ncarets; i++) {
@@ -147,7 +149,7 @@ static u32 line_at(const civue_text_block *b, f32 y) {
   return line;
 }
 
-static u32 hit(const civue_text_block *b, civue_vec2 p) {
+u32 civue_text_hit(const civue_text_block *b, civue_vec2 p) {
   return nearest_on_line(b, line_at(b, (f32)p.y), (f32)p.x);
 }
 
@@ -344,7 +346,7 @@ static void paint_inlays(civue_ui *ui, const View *v, const u8 *text,
       continue;
     }
     u32 line;
-    f32 x = caret_x(b, s->at, &line);
+    f32 x = civue_text_caret_x(b, s->at, &line);
     f32 top = b->nlines ? b->lines[line].top : 0;
     inlays->paint(ui, inlays->ctx, (const char *)text + s->from,
                   s->to - s->from,
@@ -394,7 +396,7 @@ static void key(Field *f, const View *v, const civue_key_press *k,
   e->changed = false;
   bool vertical = false;
   u32 cl;
-  f32 cx = caret_x(b, shown_at(v, f->caret), &cl);
+  f32 cx = civue_text_caret_x(b, shown_at(v, f->caret), &cl);
   u32 line_start = b->nlines ? text_at(v, b->lines[cl].start) : 0;
   u32 was = f->caret;
   switch (k->key) {
@@ -614,6 +616,7 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
     f->anchor = 0;
     f->caret = f->text.len;
     f->follow = true;
+    f->grip = (civue_text_grip){};
   }
   Edit e = {};
   const civue_text_block *b = nullptr;
@@ -638,29 +641,37 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
   if (in->has_mouse && focused_before) {
     civue_vec2 p =
       v2(in->mouse.x - origin.x + f->scroll, in->mouse.y - origin.y);
+    const char *text = (const char *)f->text.v;
+    u32 shown = civue_text_hit(b, p), past = shown;
+    u32 at = MIN(text_at(&view, shown), f->text.len);
+    // past the last word of a wrapped line: only the spaces that hang at its
+    // end are left of it.
+    while (past < view.n && view.s[past] == ' ') {
+      past++;
+    }
+    u32 line = line_at(b, (f32)p.y);
+    bool line_end = line + 1 < b->nlines && past >= b->lines[line].end &&
+                    past < view.n && view.s[past] != '\n';
     if (resp.pressed) {
-      u32 at = MIN(text_at(&view, hit(b, p)), f->text.len);
-      if (in->clicks >= 2) {
-        f->anchor =
-          word_left(&f->text, at < f->text.len && word_byte(f->text.v[at])
-                                ? next_char(&f->text, at)
-                                : at);
-        f->caret = word_right(&f->text, f->anchor);
-        f->anchor = snap(&view, f->anchor, false);
-        f->caret = snap(&view, f->caret, true);
-      }
-      else {
-        move(f, at, in->mods & CIVUE_MOD_SHIFT);
-      }
+      // a secret has no words to pick.
+      civue_text_press(&f->grip, text, f->text.len, at, line_end,
+                       secret ? 1 : in->clicks, in->mods & CIVUE_MOD_SHIFT,
+                       &f->anchor, &f->caret);
       e.touched = true;
     }
     else if (resp.dragging) {
-      f->caret = MIN(text_at(&view, hit(b, p)), f->text.len);
+      civue_text_drag(&f->grip, text, f->text.len, at, line_end, &f->anchor,
+                      &f->caret);
       // past the edges it scrolls along.
       if (multiline && !rect_contains(r, in->mouse)) {
         civue_request_repaint(ui);
       }
       e.touched = true;
+    }
+    if (e.touched && f->grip.unit != CIVUE_UNIT_CHAR) {
+      bool back = f->caret < f->anchor;
+      f->anchor = snap(&view, f->anchor, back);
+      f->caret = snap(&view, f->caret, !back);
     }
   }
   vec_each(&in->keys, k) {
@@ -694,7 +705,7 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
   u32 preedit = view_compose(&view, f->caret, &in->preedit, secret);
   b = area_layout(ui, view.s, view.n, style, wrap);
   u32 caret = shown_at(&view, f->caret) + preedit, cl;
-  f32 cx = caret_x(b, caret, &cl);
+  f32 cx = civue_text_caret_x(b, caret, &cl);
   // keeps the caret in view as it moves past the edges, and all of the
   // text once it fits.
   f32 w = (f32)rect_w(area);
@@ -736,11 +747,16 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
   if (lo != hi && !in->preedit.len) {
     for (u32 l = 0; l < b->nlines; l++) {
       u32 s = MAX(lo, b->lines[l].start), t = MIN(hi, b->lines[l].end);
-      if (s >= t && !(s == t && hi > b->lines[l].end)) {
+      // an empty line inside the selection is lit, not the line before the
+      // one it starts on.
+      bool empty =
+        s == t && lo <= b->lines[l].start && hi > b->lines[l].end;
+      if (s >= t && !empty) {
         continue;
       }
       u32 sl, tl;
-      f32 x0 = caret_x(b, s, &sl), x1 = caret_x(b, t, &tl);
+      f32 x0 = civue_text_caret_x(b, s, &sl);
+      f32 x1 = civue_text_caret_x(b, t, &tl);
       if (tl != l) {
         x1 = b->width;
       }
@@ -760,7 +776,7 @@ static civue_field_response edit_field(civue_ui *ui, civue_id id, civue_rect r,
   paint_inlays(ui, &view, f->text.v, b, at, lh, inlays);
   if (in->preedit.len) {
     u32 pl;
-    f32 p0 = caret_x(b, caret - preedit, &pl);
+    f32 p0 = civue_text_caret_x(b, caret - preedit, &pl);
     f32 y = at.y + (b->nlines ? b->lines[cl].baseline : b->baseline) + 2;
     civue_hline(ui, at.x + p0, at.x + cx, y, box.text);
   }

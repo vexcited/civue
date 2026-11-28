@@ -116,6 +116,55 @@ typedef struct {
   civue_color color;
 } civue_text_span;
 
+// the x of the caret before `byte` in a block, its line in `line`. at a wrap
+// the caret goes to the start of the next line.
+float civue_text_caret_x(const civue_text_block *b, uint32_t byte,
+                         uint32_t *line);
+// the byte whose caret is nearest to `p`, from the block's top left.
+uint32_t civue_text_hit(const civue_text_block *b, civue_vec2 p);
+
+// what a press selects and its drag grows by, as chromium does: letters,
+// words after a double press, paragraphs after a triple one.
+typedef enum : uint8_t {
+  CIVUE_UNIT_CHAR,
+  CIVUE_UNIT_WORD,
+  CIVUE_UNIT_PARAGRAPH
+} civue_text_unit;
+
+civue_text_unit civue_text_unit_of(uint32_t clicks);
+// the bytes of the unit of `s` the caret before byte `at` is in. a word is
+// a segment of unicode's UAX #29 as ICU cuts them: letters and digits run
+// on, spaces too, any other sign stands alone, and chinese, japanese, thai,
+// lao, burmese and khmer are cut by the system's dictionaries where it has
+// them. the caret between two words is in the one after it. it is in the
+// one before it at the end of the text, and when `line_end`, at the end of
+// a wrapped line, whose last spaces are no word. at the end of a paragraph
+// it is in the break that ends it. a paragraph is a line of the text, with
+// that break.
+void civue_text_unit_at(const char *s, size_t n, uint32_t at,
+                        civue_text_unit unit, bool line_end, uint32_t *from,
+                        uint32_t *to);
+
+// the press a selection of one text grows from: its unit, where it went
+// down and the bounds of the unit there.
+typedef struct {
+  civue_text_unit unit;
+  uint32_t base, from, to;
+} civue_text_grip;
+
+// a press at byte `at`, the `clicks`th in a row, selects the unit there
+// from `anchor` to `focus`. with `extend`, as shift held does, it moves an
+// end of what they hold instead, by the unit it was made with: the nearer
+// one on a mac, the focus elsewhere. `line_end` as civue_text_unit_at's.
+void civue_text_press(civue_text_grip *g, const char *s, size_t n,
+                      uint32_t at, bool line_end, uint32_t clicks, bool extend,
+                      uint32_t *anchor, uint32_t *focus);
+// the pointer went to byte `at` with the press held: the selection goes
+// from the unit pressed to the one there, both whole.
+void civue_text_drag(const civue_text_grip *g, const char *s, size_t n,
+                     uint32_t at, bool line_end, uint32_t *anchor,
+                     uint32_t *focus);
+
 typedef struct civue_text_system civue_text_system;
 
 civue_text_system *civue_text_new();

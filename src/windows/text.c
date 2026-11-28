@@ -35,6 +35,7 @@ constexpr DWRITE_GLYPH_IMAGE_FORMATS PICTURES =
 /* ========================================================================== */
 
 constexpr i32 UBRK_CHARACTER = 0;
+constexpr i32 UBRK_WORD = 1;
 constexpr i32 UCHAR_EMOJI_PRESENTATION = 58;
 
 typedef struct {
@@ -42,6 +43,9 @@ typedef struct {
                 i32 *status);
   void (*set_text)(void *brk, const u16 *text, i32 len, i32 *status);
   i32 (*next)(void *brk);
+  // the first boundary past a unit and the last one before it, -1 for none.
+  i32 (*following)(void *brk, i32 at);
+  i32 (*preceding)(void *brk, i32 at);
   void (*close)(void *brk);
   i8 (*has)(i32 c, i32 property);
   // a break iterator over graphemes, given each text in turn.
@@ -60,12 +64,16 @@ static void icu_load(Icu *icu) {
   icu->set_text =
     (typeof(icu->set_text))(void *)GetProcAddress(m, "ubrk_setText");
   icu->next = (typeof(icu->next))(void *)GetProcAddress(m, "ubrk_next");
+  icu->following =
+    (typeof(icu->following))(void *)GetProcAddress(m, "ubrk_following");
+  icu->preceding =
+    (typeof(icu->preceding))(void *)GetProcAddress(m, "ubrk_preceding");
   icu->close = (typeof(icu->close))(void *)GetProcAddress(m, "ubrk_close");
   icu->has =
     (typeof(icu->has))(void *)GetProcAddress(m, "u_hasBinaryProperty");
 
-  if (!icu->open || !icu->set_text || !icu->next || !icu->close ||
-      !icu->has) {
+  if (!icu->open || !icu->set_text || !icu->next || !icu->following ||
+      !icu->preceding || !icu->close || !icu->has) {
     *icu = (Icu){};
     return;
   }
@@ -76,6 +84,41 @@ static void icu_load(Icu *icu) {
   if (status > 0) {
     icu->graphemes = nullptr;
   }
+}
+
+// icu's dictionaries, the ones chromium cuts these words with too.
+bool civue__word_at(const u16 *s, u32 n, u32 at, u32 *from, u32 *to) {
+  static Icu icu;
+  static bool asked;
+
+  if (!asked) {
+    asked = true;
+    icu_load(&icu);
+  }
+
+  if (!icu.open) {
+    return false;
+  }
+
+  i32 status = 0;
+  void *words = icu.open(UBRK_WORD, "", s, (i32)n, &status);
+
+  if (status > 0 || !words) {
+    return false;
+  }
+
+  i32 end = icu.following(words, (i32)at);
+  i32 start = end < 0 ? end : icu.preceding(words, end);
+
+  icu.close(words);
+
+  if (start < 0) {
+    return false;
+  }
+
+  *from = (u32)start;
+  *to = (u32)end;
+  return true;
 }
 
 /* ========================================================================== */

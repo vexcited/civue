@@ -256,13 +256,14 @@ extensions, clang 19 or later or Apple clang 21, CMake 3.29 and Ninja.
   both are left out otherwise, and each is loaded by the first video or web view an app makes, never at launch.
   Vulkan is only loaded once a frame needs the gpu. PNG, JPEG, WebP and GIF images are decoded in the process by
   libpng, libjpeg-turbo 3 and libwebp where they are installed, with Little CMS for the ones in a color profile of
-  their own. gdk-pixbuf reads the other formats, and those too without the libraries. Set `CC=clang`, CMake picks
-  gcc otherwise. On Ubuntu:
+  their own. gdk-pixbuf reads the other formats, and those too without the libraries. A double click picks a word
+  of Chinese, Japanese or Thai with ICU's dictionaries where it is installed, one ideograph otherwise. Set
+  `CC=clang`, CMake picks gcc otherwise. On Ubuntu:
 
 ```sh
 sudo apt install clang cmake ninja-build pkg-config glslc libvulkan-dev libwayland-dev libwayland-bin \
   libxkbcommon-dev libfreetype-dev libharfbuzz-dev libfontconfig-dev libfribidi-dev librsvg2-dev libcairo2-dev \
-  libglib2.0-dev libenchant-2-dev libpng-dev libturbojpeg0-dev libwebp-dev liblcms2-dev \
+  libglib2.0-dev libenchant-2-dev libpng-dev libturbojpeg0-dev libwebp-dev liblcms2-dev libicu-dev \
   libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libwpewebkit-2.0-dev
 ```
 
@@ -270,7 +271,7 @@ On Arch:
 
 ```sh
 sudo pacman -S clang cmake ninja pkgconf shaderc vulkan-headers vulkan-icd-loader wayland xkbcommon freetype2 \
-  harfbuzz fontconfig fribidi librsvg cairo glib2 enchant libpng libjpeg-turbo libwebp lcms2 \
+  harfbuzz fontconfig fribidi librsvg cairo glib2 enchant libpng libjpeg-turbo libwebp lcms2 icu \
   gstreamer gst-plugins-base gst-plugins-good gst-libav wpewebkit
 ```
 
